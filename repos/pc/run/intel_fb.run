@@ -1,0 +1,406 @@
+assert_spec x86_64
+
+if {[get_cmd_switch --autopilot] && [have_include "power_on/qemu"]} {
+	puts "Run script does not support autopilot mode on Qemu"
+	exit 0
+}
+
+if {[get_cmd_switch --autopilot] && [have_board linux]} {
+	puts "Autopilot mode is not supported on this platform."
+	exit 0
+}
+
+#
+# Build
+#
+
+create_boot_directory
+
+set use_usb 1
+set use_gpu 1
+set use_top 0
+set use_fb_controller 0
+if {$use_fb_controller} {
+	set apply_on_hotplug "no"
+} else {
+	set apply_on_hotplug "yes"
+}
+
+import_from_depot [depot_user]/src/fs_rom \
+                  [depot_user]/src/vfs \
+                  [depot_user]/src/vfs_import \
+                  [depot_user]/src/report_rom
+
+set build_components {
+	core lib/ld init timer
+	driver/acpi
+	driver/platform
+	app/pci_decode
+	driver/framebuffer/intel/pc
+	test/framebuffer
+}
+
+append_if $use_usb build_components { driver/usb_host }
+append_if $use_gpu build_components { driver/gpu/intel }
+append_if $use_top build_components { app/top }
+
+build $build_components
+
+#
+# Generate config
+#
+
+append config {
+<config verbose="yes" prio_levels="4">
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+		<service name="TRACE"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="100"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="report_rom" caps="100" priority="-1">
+		<resource name="RAM" quantum="2M"/>
+		<provides>
+			<service name="ROM" />
+			<service name="Report" />
+		</provides>
+		<config>
+			<policy label="pci_decode -> system"    report="acpi -> acpi"/>
+			<policy label="intel_fb -> intel_opregion" report="acpi -> intel_opregion"/>
+			<policy label="platform -> devices" report="pci_decode -> devices"/>
+		</config>
+		<route>
+			<service name="LOG"> <parent/> </service>
+			<service name="PD">  <parent/> </service>
+			<service name="CPU"> <parent/> </service>
+			<service name="ROM"> <parent/> </service>
+		</route>
+	</start>
+
+	<start name="acpi" caps="250" priority="-1">
+		<resource name="RAM" quantum="6M"/>
+		<route>
+			<service name="IO_MEM"> <parent/> </service>
+			<service name="LOG">    <parent/> </service>
+			<service name="PD">     <parent/> </service>
+			<service name="RM">     <parent/> </service>
+			<service name="CPU">    <parent/> </service>
+			<service name="ROM">    <parent/> </service>
+			<service name="Report"> <child name="report_rom"/> </service>
+		</route>
+	</start>
+
+	<start name="pci_decode" caps="350" priority="-1">
+		<resource name="RAM" quantum="2M"/>
+		<route>
+			<service name="Report">
+				<child name="report_rom"/> </service>
+			<service name="ROM" label="system">
+				<child name="report_rom"/> </service>
+			<service name="IO_MEM"> <parent/> </service>
+			<service name="LOG">    <parent/> </service>
+			<service name="PD">     <parent/> </service>
+			<service name="RM">     <parent/> </service>
+			<service name="CPU">    <parent/> </service>
+			<service name="ROM">    <parent/> </service>
+		</route>
+	</start>
+
+	<start name="platform" caps="100" managing_system="yes" priority="-1">
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Platform"/> </provides>
+		<route>
+			<service name="ROM" label="devices"> <child name="report_rom"/> </service>
+			<service name="IRQ">     <parent/> </service>
+			<service name="IO_MEM">  <parent/> </service>
+			<service name="IO_PORT"> <parent/> </service>
+			<service name="ROM">     <parent/> </service>
+			<service name="PD">      <parent/> </service>
+			<service name="CPU">     <parent/> </service>
+			<service name="LOG">     <parent/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+		</route>
+		<config>
+			<policy label_prefix="intel_fb" info="yes">
+				<pci class="VGA"/>
+				<pci class="ISABRIDGE"/>
+			</policy>
+			<policy label_prefix="intel_gpu" info="yes">
+				<pci class="VGA"/>
+				<pci class="ISABRIDGE"/>
+			</policy>
+			<policy label_prefix="usb" info="yes">
+				<pci class="USB"/>
+			</policy>
+		</config>
+	</start>}
+
+append_if $use_top config {
+	<start name="top" priority="-1">
+		<resource name="RAM" quantum="2M"/>
+		<config period_ms="40000"/>
+		<route>
+			<service name="TRACE"> <parent label=""/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>}
+
+append config {
+	<start name="init_dynamic" caps="10000" priority="-2">
+		<binary name="init"/>
+		<resource name="RAM" quantum="1000M"/>
+		<route>
+			<service name="Report"> <child name="report_rom"/> </service>
+			<service name="Platform" label="usb"> <child name="platform" label="usb"/> </service>
+			<service name="Platform"> <child name="platform" label="intel_fb"/> </service>
+			<service name="ROM" label="intel_fb -> intel_opregion">
+				<child name="report_rom" label="intel_fb -> intel_opregion"/>
+			</service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+		<config prio_levels="2">
+			<parent-provides>
+				<service name="ROM"/>
+				<service name="IO_MEM"/>
+				<service name="IO_PORT"/>
+				<service name="PD"/>
+				<service name="RM"/>
+				<service name="CPU"/>
+				<service name="LOG"/>
+				<service name="TRACE"/>
+				<service name="Platform"/>
+				<service name="Timer"/>
+			</parent-provides>
+			<default-route>
+				<any-service> <parent/> <any-child/> </any-service>
+			</default-route>
+			<default caps="100"/>
+			<report init_ram="yes" child_ram="yes" delay_ms="10000"/>}
+
+append config {
+			<start name="report_rom" priority="-1">
+				<resource name="RAM" quantum="2M"/>
+				<provides> <service name="Report" /> <service name="ROM" /> </provides>
+				<config verbose="yes">
+					<policy label="intel_fb_controller -> connectors" report="intel_fb -> connectors"/>
+				</config>
+			</start>
+
+			<start name="report_rom_usb" priority="-1">
+				<binary name="report_rom"/>
+				<resource name="RAM" quantum="2M"/>
+				<provides> <service name="Report" /> <service name="ROM" /> </provides>
+				<config verbose="no">
+				</config>
+			</start>
+
+			<start name="config_fs" priority="-1">
+				<binary name="vfs"/>
+				<resource name="RAM" quantum="8M"/>
+				<provides> <service name="File_system"/> </provides>
+				<config>
+					<vfs>
+						<ram/>
+						<import>
+							<inline name="fb.config">
+<config ld_verbose="yes" apply_on_hotplug="} $apply_on_hotplug {">
+	<report connectors="yes"/>
+	<merge name="mirror">
+		<!-- all connectors in merge node gets mirrored -->
+<!--
+		<connector name="DP-1"/>
+		<connector name="HDMI-A-1"/>
+-->
+	</merge>
+</config>
+							</inline>
+						</import>
+					</vfs>
+					<policy label_prefix="config_rom" root="/"/>
+					<policy label_prefix="intel_fb_controller" root="/" writeable="yes"/>
+				</config>
+			</start>
+
+			<start name="config_rom" priority="-1">
+				<binary name="fs_rom"/>
+				<resource name="RAM" quantum="4M"/>
+				<provides><service name="ROM"/></provides>
+				<route>
+					<service name="File_system"> <child name="config_fs" /> </service>
+					<any-service> <parent/> <any-child/> </any-service>
+				</route>
+			</start>}
+
+append_if $use_gpu config {
+			<start name="intel_gpu" caps="2000">
+				<resource name="RAM" quantum="90M"/>
+				<provides>
+					<service name="Gpu"/>
+					<service name="Platform"/>
+				</provides>
+				<config max_framebuffer_memory="64M">
+					<device vendor="0x8086" device="0x1606" generation="8" platform="broadwell" description="HD Graphics (BDW GT1 ULT)"/>
+					<device vendor="0x8086" device="0x1616" generation="8" platform="broadwell" description="HD Graphics 5500 (BDW GT2 ULT)"/>
+					<device vendor="0x8086" device="0x1622" generation="8" platform="broadwell" description="Iris Pro Graphics 6200 (BDW GT3e)"/>
+					<device vendor="0x8086" device="0x1916" generation="9" platform="skylake"  description="HD Graphics 520 (Skylake, Gen9)"/>
+					<device vendor="0x8086" device="0x191b" generation="9" platform="skylake"  description="HD Graphics 530 (Skylake, Gen9)"/>
+					<device vendor="0x8086" device="0x5916" generation="9" platform="kabylake" description="HD Graphics 620 (Kaby Lake, Gen9p5)"/>
+					<device vendor="0x8086" device="0x5917" generation="9" platform="kabylake" description="UHD Graphics 620 (Kaby Lake, Gen9p5)"/>
+					<device vendor="0x8086" device="0x591b" generation="9" platform="kabylake" description="HD Graphics 630 (Kaby Lake, Gen9p5)"/>
+					<device vendor="0x8086" device="0x3ea0" generation="9" platform="whiskeylake" description="UHD Graphics 620 (Whiskey Lake, Gen9p5)"/>
+					<device vendor="0x8086" device="0x9a49" generation="12" platform="tigerlake" description="Iris Xe Graphics (Tiger Lake, Xe)"/>
+				</config>
+				<route>
+					<service name="Platform"> <parent/> </service>
+					<any-service> <parent /> <any-child/> </any-service>
+				</route>
+			</start>}
+
+append config {
+			<start name="intel_fb" caps="1000">
+				<binary name="pc_intel_fb"/>
+				<resource name="RAM" quantum="128M"/>
+				<route>}
+
+append_if $use_gpu config {
+					<service name="Platform"> <child name="intel_gpu"/> </service>}
+
+append config {
+					<service name="ROM" label="config">
+						<child name="config_rom" label="fb.config"/> </service>
+					<service name="Report"> <child name="report_rom"/> </service>
+
+					<service name="Capture" label="eDP-1"> <child name="test-framebuffer-eDP-1"/> </service>
+					<service name="Capture" label="HDMI-A-1"> <child name="test-framebuffer-HDMI-A-1"/> </service>
+					<service name="Capture" label="HDMI-A-2"> <child name="test-framebuffer-HDMI-A-2"/> </service>
+					<service name="Capture" label="HDMI-A-3"> <child name="test-framebuffer-HDMI-A-3"/> </service>
+					<service name="Capture" label="DP-1"> <child name="test-framebuffer-DP-1"/> </service>
+					<service name="Capture" label="DP-2"> <child name="test-framebuffer-DP-2"/> </service>
+					<service name="Capture" label="DP-3"> <child name="test-framebuffer-DP-3"/> </service>
+					<service name="Capture" label="DP-4"> <child name="test-framebuffer-DP-4"/> </service>
+					<service name="Capture" label="VGA-1"> <child name="test-framebuffer-VGA-1"/> </service>
+					<service name="Capture" label="mirror"> <child name="test-framebuffer-mirror"/> </service>
+
+					<any-service> <parent/> <any-child /> </any-service>
+				</route>
+			</start>}
+
+append_if $use_usb config {
+			<start name="usb" priority="0" caps="200">
+				<binary name="pc_usb_host"/>
+				<resource name="RAM" quantum="12M"/>
+				<provides> <service name="Usb"/> </provides>
+				<config bios_handoff="no">
+					<report devices="yes"/>
+				</config>
+				<route>
+					<service name="Platform"> <parent label="usb"/> </service>
+					<service name="Report"> <child name="report_rom_usb"/> </service>
+					<any-service><parent/><any-child/></any-service>
+				</route>
+			</start>}
+
+append_if $use_fb_controller config {
+			<start name="intel_fb_controller" priority="-1">
+				<resource name="RAM" quantum="1M"/>
+				<config>
+					<vfs> <fs/> </vfs>
+				</config>
+				<route>
+					<service name="File_system">            <child name="config_fs"/> </service>
+					<service name="ROM" label="connectors"> <child name="report_rom"/> </service>
+					<any-service> <parent/> <any-child/> </any-service>
+				</route>
+			</start>}
+
+append config {
+			<start name="test-framebuffer-eDP-1" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-HDMI-A-1" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-HDMI-A-2" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-HDMI-A-3" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-DP-1" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-DP-2" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-DP-3" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-DP-4" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-VGA-1" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+			<start name="test-framebuffer-mirror" priority="-1">
+				<binary name="test-framebuffer"/>
+				<resource name="RAM" quantum="10M"/>
+				<provides> <service name="Capture"/> </provides>
+				<config/>
+			</start>
+		</config>
+	</start>
+</config>}
+
+install_config $config
+
+build_boot_image [build_artifacts]
+
+if { [get_cmd_switch --autopilot] } {
+	run_genode_until {\[init -\> init_dynamic -\> intel_fb\].*connector connected="true" name="HDMI-A-3"} 30
+	run_genode_until {\</connectors\>} 20 [output_spawn_id]
+	run_genode_until {green} 30 [output_spawn_id]
+} else {
+	run_genode_until forever
+}

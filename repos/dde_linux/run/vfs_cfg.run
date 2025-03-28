@@ -1,0 +1,132 @@
+if {[get_cmd_switch --autopilot] && [have_board virt_qemu_riscv]} {
+	puts "Autopilot mode is not supported on this platform."
+	exit 0
+}
+
+build {
+	core lib/ld init timer lib/vfs
+	lib/vfs_lxip
+	server/vfs
+	server/dynamic_rom
+	server/nic_router
+	app/ping
+}
+
+create_boot_directory
+
+install_config {
+<config verbose="yes">
+	<parent-provides>
+		<service name="CPU"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="IRQ"/>
+		<service name="LOG"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="ROM"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="100"/>
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Timer"/> </provides>
+	</start>
+
+	<start name="ping_1">
+		<binary name="ping"/>
+		<resource name="RAM" quantum="8M"/>
+		<config interface="10.0.2.3/24"
+		        gateway="10.0.2.1"
+		        dst_ip="10.0.2.2"
+		        period_sec="1"
+		        verbose="no"
+		        count="3"/>
+		<route>
+			<service name="Nic"> <child name="nic_router"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="ping_2">
+		<binary name="ping"/>
+		<resource name="RAM" quantum="8M"/>
+		<config interface="10.0.2.4/24"
+		        gateway="10.0.2.1"
+		        dst_ip="10.0.2.55"
+		        period_sec="1"
+		        verbose="no"
+		        count="3"/>
+		<route>
+			<service name="Nic"> <child name="nic_router"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="nic_router" caps="200">
+		<resource name="RAM" quantum="10M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config verbose_domain_state="yes">
+
+			<default-policy domain="default"/>
+			<domain name="default" interface="10.0.2.1/24">
+
+				<dhcp-server ip_first="10.0.2.2" ip_last="10.0.2.2"/>
+
+			</domain>
+
+		</config>
+	</start>
+
+	<start name="dynamic_rom">
+		<resource name="RAM" quantum="4M"/>
+		<provides><service name="ROM"/> </provides>
+		<config verbose="yes">
+			<rom name="socket_fs.config"><inline description="static">
+			<config>
+				<vfs>
+					<lxip ip_addr="10.0.2.55" netmask="255.255.255.0" gateway="10.0.2.1" nameserver="8.8.8.8"/>
+				</vfs>
+			</config>
+			</inline>
+			<sleep milliseconds="2500"/> <inline description="dynamic">
+			<config>
+				<vfs>
+					<lxip mtu="1000" dhcp="yes"/>
+				</vfs>
+			</config>
+			</inline>
+			<sleep milliseconds="2500"/>
+			</rom>
+		</config>
+	</start>
+
+	<start name="socket_fs" caps="200">
+		<binary name="vfs"/>
+		<resource name="RAM" quantum="32M"/>
+		<provides> <service name="File_system"/> </provides>
+		<route>
+			<service name="ROM" label="config">
+				<child name="dynamic_rom" label="socket_fs.config"/> </service>
+			<service name="Nic"> <child name="nic_router"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+</config> }
+
+build_boot_image [build_artifacts]
+
+append done_string ".*\"ping_.\" exited with exit value 0.*\n"
+append done_string ".*\"ping_.\" exited with exit value 0.*\n"
+
+append qemu_args " -nographic "
+
+run_genode_until $done_string 60
+
+# vi: set ft=tcl :

@@ -1,0 +1,141 @@
+#
+# \brief  Test for using the lwIP TCP/IP stack over USB
+# \author Sebastian Sumpf
+# \date   2012-07-06
+#
+# This test case executes a small HTTP server, it has been used on PandaBoard
+# hardware only, though it should execute but not do anything on other hardware
+#
+
+create_boot_directory
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/pkg/test_usb_host-[board] \
+                  [depot_user]/src/usb_net \
+                  [depot_user]/src/nic_router \
+                  [depot_user]/src/libc \
+                  [depot_user]/src/vfs \
+                  [depot_user]/src/vfs_lwip \
+                  [depot_user]/src/init
+
+build { test/lwip/http_srv }
+
+install_config {
+<config>
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="200"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="usb" caps="1500" managing_system="yes">
+		<binary name="init"/>
+		<resource name="RAM" quantum="32M"/>
+		<provides> <service name="Usb"/> </provides>
+		<route>
+			<service name="ROM" label="config">
+				<parent label="drivers.config"/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="usb_net">
+		<resource name="RAM" quantum="20M"/>
+		<config mac="02:00:00:00:01:01" />
+		<route>
+			<service name="Uplink"><child name="nic_router"/></service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="nic_router" caps="200">
+		<resource name="RAM" quantum="10M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config verbose_domain_state="yes">
+
+			<policy label_prefix="test-lwip_httpsrv" domain="downlink"/>
+			<policy label_prefix="usb_net"           domain="uplink"/>
+
+			<domain name="uplink">
+
+				<nat domain="downlink" tcp-ports="16384"/>
+				<tcp-forward port="443" domain="downlink" to="10.0.3.2"/>
+				<tcp-forward port="80"  domain="downlink" to="10.0.3.2"/>
+
+			</domain>
+
+			<domain name="downlink" interface="10.0.3.1/24">
+
+				<dhcp-server ip_first="10.0.3.2" ip_last="10.0.3.2"/>
+
+			</domain>
+
+		</config>
+	</start>
+
+	<start name="test-lwip_httpsrv" caps="120">
+		<resource name="RAM" quantum="6M"/>
+		<config>
+			<vfs>
+				<dir name="dev">    <log/>             </dir>
+				<dir name="socket"> <lwip dhcp="yes"/> </dir>
+			</vfs>
+			<libc stdout="/dev/log" stderr="/dev/log" socket="/socket"/>
+		</config>
+		<route>
+			<service name="Nic"><child name="nic_router"/></service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+</config>
+}
+
+#
+# Define USB host controller config
+#
+set config {<config bios_handoff="yes">}
+append_if [have_board rpi] config {
+	<policy label_prefix="usb_net">
+		<device vendor_id="0x0424" product_id="0xec00"/> </policy>}
+append_if [have_spec x86] config {
+	<policy label_prefix="usb_net">
+		<device vendor_id="0x0b95" product_id="0x1790"/> </policy> }
+append config {</config>}
+set fd [open [run_dir]/genode/usb_host.config w]
+puts $fd $config
+close $fd
+
+build_boot_image [build_artifacts]
+
+proc usb_bus {} {
+	return "$::env(BUS)" }
+
+proc usb_device {} {
+	return "$::env(DEVICE)" }
+
+
+append qemu_args "  -nographic"
+append qemu_args { -usb -device nec-usb-xhci,id=xhci \
+                   -device usb-host,hostbus=[usb_bus],hostaddr=[usb_device],bus=xhci.0 }
+
+
+run_genode_until forever
+
+# vi: set ft=tcl :

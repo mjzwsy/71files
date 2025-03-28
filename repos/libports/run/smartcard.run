@@ -1,0 +1,119 @@
+#
+# Smartcard test
+#
+# NOTE: The vendor id and product id of the USB card reader to be used must be
+#       configured for the application and for the USB driver.
+#
+
+if {[have_include "power_on/qemu"] || [have_spec linux]} {
+	puts "Run script does not support Qemu or Linux"
+	exit 0
+}
+
+assert_spec x86_64
+
+#
+# Please configure your reader's vendor and product IDs here
+#
+proc smartcard_vendor_id {}  { return "0x04e6" }
+proc smartcard_product_id {} { return "0x5116" }
+
+#
+# Build
+#
+
+create_boot_directory
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/pkg/test_usb_host-[board] \
+                  [depot_user]/src/report_rom \
+                  [depot_user]/src/init
+build {
+	lib/libc lib/libm lib/vfs lib/posix lib/libusb lib/vfs_libusb lib/vfs_pipe
+	test/smartcard
+}
+
+install_config {
+<config>
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="100"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="report_rom">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config>
+			<default-policy report="usb -> usb -> devices"/>
+		</config>
+		<route>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="usb" caps="1500" managing_system="yes">
+		<binary name="init"/>
+		<resource name="RAM" quantum="32M"/>
+		<provides> <service name="Usb"/> </provides>
+		<route>
+			<service name="ROM" label="config">
+				<parent label="drivers.config"/> </service>
+			<service name="Report"> <child name="report_rom"/> </service>
+			<service name="Timer">  <child name="timer"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="test-smartcard" caps="150">
+		<resource name="RAM" quantum="5M"/>
+		<config>
+			<vfs>
+				<dir name="dev">
+					<log/>
+					<inline name="rtc">2018-01-01 00:01</inline>
+					<libusb/>
+				</dir>
+				<dir name="pipe"> <pipe/> </dir>
+				<dir name="ifd-ccid.bundle">
+					<dir name="Contents">
+						<rom name="Info.plist"/>
+					</dir>
+				</dir>
+			</vfs>
+			<libc stdout="/dev/log" stderr="/dev/log" rtc="/dev/rtc" pipe="/pipe"/>
+			<env key="LIBUSB_DEBUG" value="1"/> <!-- log libusb errors -->
+		</config>
+	</start>
+</config>}
+
+#
+# Define USB host controller config
+#
+append usb_config {
+<config bios_handoff="yes">
+	<report devices="yes"/>
+	<policy label="test-smartcard -> "><device vendor_id="} [smartcard_vendor_id] {" product_id="} [smartcard_product_id] {"/></policy>
+</config>}
+set fd [open [run_dir]/genode/usb_host.config w]
+puts $fd $usb_config
+close $fd
+
+build_boot_image [list {*}[build_artifacts] Info.plist]
+
+run_genode_until { Response: 62 0A 82 01 38 83 02 3F 00 8A 01 05 90 00} 30
+
+exec rm bin/Info.plist

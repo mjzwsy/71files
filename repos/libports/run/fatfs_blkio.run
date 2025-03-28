@@ -1,0 +1,70 @@
+if {[expr ![have_include "power_on/qemu"] && ![have_spec linux]]} {
+	puts "Test only runs in Qemu or Linux.\n";
+	exit 0
+}
+
+create_boot_directory
+
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/src/init \
+                  [depot_user]/src/vfs_block \
+                  [depot_user]/src/vfs_import
+
+build { test/fatfs_block_io lib/libc lib/vfs }
+
+install_config {
+<config>
+	<parent-provides>
+		<service name="CPU"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="IRQ"/>
+		<service name="LOG"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="ROM"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="128"/>
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+	<start name="test-fatfs_block_io">
+		<resource name="RAM" quantum="10M"/>
+		<config ld_verbose="true">
+			<libc stdout="/log" stderr="/log"/>
+			<vfs> <log/> </vfs>
+		</config>
+	</start>
+	<start name="vfs_block">
+		<resource name="RAM" quantum="4M" />
+		<provides><service name="Block"/></provides>
+		<config>
+			<vfs>
+				<ram/>
+				<import>
+					<zero name="block_file" size="1M"/>
+				</import>
+			</vfs>
+			<default-policy file="/block_file" block_size="512"
+			                writeable="yes"/>
+		</config>
+	</start>
+</config>
+}
+
+set disk_image "bin/test.hda"
+set cmd "dd if=/dev/zero of=$disk_image bs=512 count=4096"
+puts "creating disk image: $cmd"
+catch { exec sh -c $cmd }
+
+build_boot_image [list {*}[build_artifacts] test.hda]
+
+append qemu_args " -nographic "
+
+run_genode_until {.*child "test-fatfs_block_io" exited with exit value 0.*} 60
+
+exec rm -f $disk_image

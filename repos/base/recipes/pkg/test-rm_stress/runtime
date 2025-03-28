@@ -1,0 +1,27 @@
+<runtime ram="32M" caps="1000" binary="init">
+
+	<fail after_seconds="45"/>
+	<succeed>child "test-rm_stress" exited with exit value 0</succeed>
+	<fail>child "test-rm_stress" exited with exit value -1</fail>
+
+	<content>
+		<rom label="ld.lib.so"/>
+		<rom label="test-rm_stress"/>
+	</content>
+
+	<config>
+		<parent-provides>
+			<service name="ROM"/>
+			<service name="CPU"/>
+			<service name="RM"/>
+			<service name="PD"/>
+			<service name="LOG"/>
+		</parent-provides>
+		<default-route>
+			<any-service> <parent/> </any-service>
+		</default-route>
+		<start name="test-rm_stress" caps="110">
+			<resource name="RAM" quantum="10M"/>
+		</start>
+	</config>
+</runtime>

@@ -1,0 +1,240 @@
+#
+# \brief  Virtual-machine monitor demo
+# \author Stefan Kalkowski
+# \date   2015-06-25
+#
+
+assert_spec hw
+
+if { ![have_board imx7d_sabre] && ![have_board imx8q_evk] &&
+     ![have_board virt_qemu_arm_v7a] &&
+     ![have_board virt_qemu_arm_v8a]} {
+	puts "Run script is not supported on this platform"
+	exit 0
+}
+
+create_boot_directory
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/src/init \
+                  [depot_user]/src/libc \
+                  [depot_user]/src/log_terminal \
+                  [depot_user]/src/nic_router \
+                  [depot_user]/src/terminal_crosslink \
+                  [depot_user]/src/vfs \
+                  [depot_user]/src/vfs_block \
+                  [depot_user]/src/vmm
+
+build { test/terminal_expect_send }
+
+proc vmm_config { } {
+
+	# for early printk add bootarg: earlycon=pl011,0x9000000
+
+	if {[have_spec arm]} {
+		return {
+		<config kernel_rom="linux" initrd_rom="initrd" ram_size="128M"
+		        cpu_count="1" cpu_type="arm,cortex-a15" gic_version="2"
+		        bootargs="rdinit=/bin/sh ip=dhcp console=hvc0">
+			<virtio_device name="hvc0" type="console"/>
+			<virtio_device name="eth0" type="net"/>
+			<virtio_device name="blk0" type="block"/>
+		</config>}
+	}
+
+	if {[have_spec arm_64]} {
+		return {
+		<config kernel_rom="linux" initrd_rom="initrd" ram_size="128M"
+		        cpu_count="4" cpu_type="arm,cortex-a53" gic_version="3"
+		        bootargs="rdinit=/bin/sh ip=dhcp console=hvc0">
+			<virtio_device name="hvc0" type="console"/>
+			<virtio_device name="eth0" type="net"/>
+			<virtio_device name="blk0" type="block"/>
+		</config>}
+	}
+
+	return unavailable
+}
+
+install_config {
+<config verbose="yes" prio_levels="2">
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+		<service name="VM"/>
+	</parent-provides>
+	<default-route>
+		<any-service><parent/><any-child/></any-service>
+	</default-route>
+	<default caps="100"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="nic">
+		<binary name="nic_router" />
+		<resource name="RAM" quantum="8M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config>
+			<default-policy domain="default"/>
+			<domain name="default" interface="10.0.1.1/24">
+				<dhcp-server ip_first="10.0.1.2" ip_last="10.0.1.2" />
+			</domain>
+		</config>
+	</start>
+
+	<start name="vfs_block">
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Block"/> </provides>
+		<config>
+			<vfs> <rom name="block.img"/> </vfs>
+			<default-policy file="/block.img" block_size="512"/>
+		</config>
+		<route>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="log_terminal">
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Terminal"/> </provides>
+	</start>
+
+	<start name="terminal_crosslink">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Terminal"/> </provides>
+	</start>
+
+	<start name="vmm" caps="200" priority="-1">
+		<resource name="RAM" quantum="256M"/>
+		<route>
+			<service name="Terminal" label="earlycon"> <child name="log_terminal"/> </service>
+			<service name="Terminal"> <child name="terminal_crosslink"/> </service>
+			<service name="Nic"> <child name="nic"/> </service>
+			<any-service><parent/><any-child/></any-service>
+		</route>} [vmm_config] {
+	</start>
+
+	<start name="vm">
+		<binary name="test-terminal_expect_send"/>
+		<resource name="RAM" quantum="1M"/>
+		<config expect="/ #" send="mount /dev/vda /root; cp -r /etc /root; ls /root/etc; umount /root" verbose="yes"/>
+		<route>
+			<service name="Terminal"> <child name="terminal_crosslink"/> </service>
+			<any-service><parent/><any-child/></any-service>
+		</route>
+	</start>
+</config>
+}
+
+
+if { [have_spec arm] } {
+
+	if {![file exists bin/linux]} {
+		puts "Download linux kernel ..."
+			exec >& /dev/null wget -c -O bin/linux http://genode.org/files/release-22.11/linux-virtio-arm32
+	}
+
+	if {![file exists bin/initrd]} {
+		puts "Download initramfs ..."
+			exec >& /dev/null wget -c -O bin/initrd http://genode.org/files/release-20.05/initrd-arm32
+	}
+
+#
+# To build the linux kernel from scratch, do the following steps:
+#
+# wget https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.14.21.tar.xz
+# tar -xJf linux-5.14.21.tar.xz
+# cd linux-5.14.21
+# wget -O .config https://raw.githubusercontent.com/skalk/linux/66fb717e92b47512d8f686860a2c5e7329d01691/arch/arm/configs/virtio_only_defconfig
+# make ARCH=arm CROSS_COMPILE=/usr/local/genode/tool/current/bin/genode-arm-
+#
+# copy arch/arm/boot/Image to your build directory in 'bin/linux'
+#
+#
+# To construct the initrd do the following:
+# * get and install gcc from bootlin:
+#      (https://toolchains.bootlin.com/downloads/releases/toolchains/armv7-eabihf/tarballs/)
+# * build busybox
+#      wget https://busybox.net/downloads/busybox-1.31.1.tar.bz2
+#      tar xjf busybox-1.31.1.tar.bz2
+#      mkdir build-busybox-aarch32
+#      cd busybox-1.31.1
+#      make O=../build-busybox-aarch32 defconfig
+#      make O=../build-busybox-aarch32 menuconfig
+#
+#      [*] Setting ->  Build static binary (no shared libs)
+#
+#      cd ../build-busybox-aarch32
+#      make CROSS_COMPILE=/opt/armv7-eabihf--uclibc--stable-2020.02-1/bin/arm-buildroot-linux-uclibcgnueabihf- install -j6
+# * create ramdisk
+#      cd _install
+#      find . | cpio -H newc -o | gzip > ../initrd
+#
+}
+
+if { [have_spec arm_64] } {
+
+	if {![file exists bin/linux]} {
+		puts "Download linux kernel ..."
+			exec >& /dev/null wget -c -O bin/linux http://genode.org/files/release-22.11/linux-virtio-arm64
+	}
+
+	if {![file exists bin/initrd]} {
+		puts "Download initramfs ..."
+			exec >& /dev/null wget -c -O bin/initrd http://genode.org/files/release-20.02/initrd-arm64
+	}
+
+#
+# To build the linux kernel from scratch, do the following steps:
+#
+# wget https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.14.21.tar.xz
+# tar -xJf linux-5.14.21.tar.xz
+# cd linux-5.14.21
+# wget -O .config https://raw.githubusercontent.com/skalk/linux/66fb717e92b47512d8f686860a2c5e7329d01691/arch/arm64/configs/virtio_only_defconfig
+# make ARCH=arm64 CROSS_COMPILE=/usr/local/genode/tool/current/bin/genode-aarch64-
+#
+# copy arch/arm64/boot/Image to your build directory in 'bin/linux'
+#
+#
+# To construct the initrd do the following:
+# * get and install gcc from linaro
+#      (https://releases.linaro.org/components/toolchain/binaries/latest-7/)
+# * build busybox
+#      wget https://busybox.net/downloads/busybox-1.29.3.tar.bz2
+#      tar xjf busybox-1.29.3.tar.bz2
+#      mkdir build-busybox-aarch64
+#      cd busybox-1.29.3
+#      make O=../build-busybox-aarch64 defconfig
+#      make O=../build-busybox-aarch64 menuconfig
+#
+#      [*] Setting ->  Build static binary (no shared libs)
+#
+#      cd ../build-busybox-aarch64
+#      make CROSS_COMPILE=/usr/local/gcc-linaro/bin/aarch64-linux-gnu- install -j6
+# * create ramdisk
+#      cd _install
+#      find . | cpio -H newc -o | gzip > ../initrd
+}
+
+catch { exec [installed_command dd] if=/dev/zero of=bin/block.img bs=1M count=0 seek=64 }
+exec [installed_command mkfs.vfat] bin/block.img
+
+build_boot_image [list {*}[build_artifacts] linux initrd block.img]
+
+#
+# Execute test case
+#
+append qemu_args " -nographic "
+
+run_genode_until "\[init -> vm\] .*resolv.conf.*" 220
+exec rm bin/linux bin/initrd bin/block.img

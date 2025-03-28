@@ -1,0 +1,27 @@
+<runtime ram="32M" caps="1000" binary="init">
+
+	<fail after_seconds="20"/>
+	<succeed>child "test-registry" exited with exit value 0</succeed>
+	<fail>Uncaught exception</fail>
+
+	<content>
+		<rom label="ld.lib.so"/>
+		<rom label="test-registry"/>
+	</content>
+
+	<config>
+		<parent-provides>
+			<service name="LOG"/>
+			<service name="PD"/>
+			<service name="CPU"/>
+			<service name="ROM"/>
+		</parent-provides>
+		<default-route>
+			<any-service> <parent/> </any-service>
+		</default-route>
+		<default caps="50"/>
+		<start name="test-registry">
+			<resource name="RAM" quantum="10M"/>
+		</start>
+	</config>
+</runtime>

@@ -1,0 +1,93 @@
+source ${genode_dir}/repos/os/run/assert_qemu_nic.inc
+
+create_boot_directory
+
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/pkg/[drivers_nic_pkg]
+
+build { app/ping server/nic_router init }
+
+install_config {
+<config>
+
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+	</parent-provides>
+
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+
+	<default caps="200"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="drivers" caps="1100" managing_system="yes">
+		<resource name="RAM" quantum="32M"/>
+		<binary name="init"/>
+		<route>
+			<service name="ROM" label="config"> <parent label="drivers.config"/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="Uplink"> <child name="nic_router"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="nic_router">
+		<resource name="RAM" quantum="10M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config>
+
+			<policy label_prefix="ping"    domain="downlink"/>
+			<policy label_prefix="drivers" domain="uplink"/>
+
+			<domain name="uplink" use_arp="no" verbose_packets="yes">
+				<nat domain="downlink" icmp-ids="100"/>
+			</domain>
+
+			<domain name="downlink" interface="10.0.3.1/24">
+				<icmp dst="10.0.2.2/24" domain="uplink"/>
+			</domain>
+
+		</config>
+	</start>
+
+	<start name="ping">
+		<resource name="RAM" quantum="8M"/>
+		<config interface="10.0.3.2/24"
+		        gateway="10.0.3.1"
+		        dst_ip="10.0.2.2"
+		        period_sec="1"
+		        count="2"/>
+		<route>
+			<service name="Nic"> <child name="nic_router"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+</config>}
+
+build_boot_image [build_artifacts]
+
+append qemu_args " -nographic "
+append_qemu_nic_args
+
+set done_string ".*child \"ping\" exited with exit value 0.*\n"
+
+run_genode_until $done_string 60
+
+grep_output { ARP }
+compare_output_to {}

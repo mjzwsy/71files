@@ -1,0 +1,18 @@
+<runtime ram="16M" caps="150" binary="test-sanitizer">
+
+	<fail after_seconds="10"/>
+	<succeed>
+			[init]*runtime error: *index 2 out of bounds*
+			[init]*runtime error: *store to null pointer
+	</succeed>
+
+	<content>
+		<rom label="ld.lib.so"/>
+		<rom label="libsanitizer_common.lib.so"/>
+		<rom label="libubsan.lib.so"/>
+		<rom label="test-sanitizer"/>
+	</content>
+
+	<config/>
+
+</runtime>

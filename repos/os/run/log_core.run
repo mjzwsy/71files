@@ -1,0 +1,119 @@
+if {[have_spec linux]} {
+	puts "\n Run script is not supported on this platform. \n";
+	exit 0
+}
+if {[get_cmd_switch --autopilot] && ![have_include "power_on/qemu"]} {
+	puts "\n Run script is not supported on this platform. \n";
+	exit 0
+}
+
+proc log_service { } {
+	if { [get_cmd_switch --autopilot] } { return log }
+	return ram
+}
+
+if {[have_spec nova]} {
+	proc kernel_output { } { return "logmem" }
+}
+
+build {
+	core init timer lib/ld lib/libc lib/vfs
+	server/file_terminal server/terminal_log app/log_core
+}
+
+create_boot_directory
+
+proc kernel_start_node { } {
+
+	if {![have_spec nova]} {
+		return { } }
+
+	return {
+	<start name="log_kernel">
+		<binary name="log_core"/>
+		<resource name="RAM" quantum="10M"/>
+		<config period_ms="2000"/>
+		<route>
+			<service name="ROM" unscoped_label="log_core"> <parent/> </service>
+			<service name="ROM" unscoped_label="ld.lib.so"> <parent/> </service>
+			<service name="ROM" label="log"> <parent label="kernel_log"/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="PD"> <parent/> </service>
+			<service name="CPU"> <parent/> </service>
+			<service name="LOG"> <parent/> </service>
+		</route>
+	</start>}
+}
+
+install_config {
+<config>
+	<parent-provides>
+		<service name="CPU"/>
+		<service name="IO_PORT"/>
+		<service name="IRQ"/>
+		<service name="LOG"/>
+		<service name="PD"/>
+		<service name="ROM"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> </any-service>
+	</default-route>
+
+	<default caps="100"/>
+
+	<start name="timer">
+		<resource name="CPU" quantum="10"/>
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="file_terminal">
+		<binary name="file_terminal"/>
+		<resource name="RAM" quantum="3M"/>
+		<provides> <service name="Terminal"/> </provides>
+		<config>
+			<default-policy filename="log" />
+			<vfs> <dir name="dev"> <log/> </dir> <log label="log_core"/> </vfs>
+			<libc stdout="/dev/log"/>
+		</config>
+		<route> <any-service> <parent/> </any-service> </route>
+	</start>
+
+	<start name="terminal_log">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="LOG"/> </provides>
+		<config/>
+		<route>
+			<service name="Terminal"> <child name="file_terminal"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="log_core">
+		<resource name="RAM" quantum="10M"/>
+		<config period_ms="2000"/>
+		<route>
+			<service name="ROM" unscoped_label="log_core"> <parent/> </service>
+			<service name="ROM" unscoped_label="ld.lib.so"> <parent/> </service>
+			<service name="ROM" label="log"> <parent label="core_log"/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="LOG" label="log"> <child name="terminal_log"/> </service>
+			<service name="PD"> <parent/> </service>
+			<service name="CPU"> <parent/> </service>
+			<service name="LOG"> <parent/> </service>
+		</route>
+	</start>
+
+	} [kernel_start_node] {
+
+</config>}
+
+build_boot_image [build_artifacts]
+
+append qemu_args " -nographic "
+
+if { [get_cmd_switch --autopilot] } {
+	run_genode_until {.*\[log_core -> log] \[.*\n} 20
+} else {
+	run_genode_until forever
+}

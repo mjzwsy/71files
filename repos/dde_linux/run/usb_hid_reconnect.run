@@ -1,0 +1,165 @@
+#
+# USB HID test
+#
+# Test connect and disconnect on Qemu
+
+assert_spec x86
+
+if {[have_spec linux]} {
+	puts "Run script does not support Linux."
+	exit 0
+}
+
+if {![have_include "power_on/qemu"]} {
+	puts "Test requires to be run on Qemu."
+	exit 0
+}
+
+create_boot_directory
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/pkg/test_usb_host-[board] \
+                  [depot_user]/src/dynamic_rom \
+                  [depot_user]/src/report_rom \
+                  [depot_user]/src/usb_hid \
+                  [depot_user]/src/init
+
+build { server/event_dump }
+
+install_config {
+<config>
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="100"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="report_rom">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config verbose="no">
+			<default-policy report="usb -> usb -> devices"/>
+		</config>
+	</start>
+
+	<start name="usb" caps="1500" managing_system="yes">
+		<binary name="init"/>
+		<resource name="RAM" quantum="32M"/>
+		<provides> <service name="Usb"/> </provides>
+		<route>
+			<service name="ROM" label="config">
+				<parent label="drivers.config"/> </service>
+			<service name="Timer">    <child name="timer"/> </service>
+			<service name="Report">   <child name="report_rom"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="usb_hid" caps="180">
+		<resource name="RAM" quantum="11M"/>
+		<config capslock_led="rom" numlock_led="rom" scrlock_led="rom"/>
+		<route>
+			<service name="ROM" label="capslock"> <child name="dynamic_rom"/> </service>
+			<service name="ROM" label="numlock">  <child name="dynamic_rom"/> </service>
+			<service name="ROM" label="scrlock">  <child name="dynamic_rom"/> </service>
+			<service name="ROM" label="report"> <child name="report_rom"/> </service>
+			<service name="Event"> <child name="event_dump"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="dynamic_rom">
+		<resource name="RAM" quantum="4M"/>
+		<provides> <service name="ROM"/> </provides>
+		<config verbose="no">
+			<rom name="capslock">
+				<inline> <capslock enabled="no"/> </inline>
+				<sleep milliseconds="250" />
+				<inline> <capslock enabled="yes"/> </inline>
+				<sleep milliseconds="250" />
+			</rom>
+			<rom name="numlock">
+				<inline> <numlock enabled="no"/> </inline>
+				<sleep milliseconds="500" />
+				<inline> <numlock enabled="yes"/> </inline>
+				<sleep milliseconds="500" />
+			</rom>
+			<rom name="scrlock">
+				<inline> <scrlock enabled="no"/> </inline>
+				<sleep milliseconds="1000" />
+				<inline> <scrlock enabled="yes"/> </inline>
+				<sleep milliseconds="1000" />
+			</rom>
+		</config>
+		<route>
+			<service name="ROM">   <parent/>             </service>
+			<service name="CPU">   <parent/>             </service>
+			<service name="PD">    <parent/>             </service>
+			<service name="LOG">   <parent/>             </service>
+			<service name="Timer"> <child name="timer"/> </service>
+		</route>
+	</start>
+
+	<start name="event_dump">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Event"/> </provides>
+		<config/>
+	</start>
+</config>}
+
+#
+# Define USB host controller config
+#
+set fd [open [run_dir]/genode/usb_host.config w]
+puts $fd {
+<config bios_handoff="yes">
+	<report devices="yes"/>
+	<policy label_prefix="usb_hid"> <device class="0x3"/> </policy>
+</config>}
+close $fd
+
+build_boot_image [build_artifacts]
+
+append qemu_args " -device nec-usb-xhci,id=xhci -device usb-kbd,bus=xhci.0 -nographic"
+
+# wait for keyboard
+run_genode_until {.*USB HID v1.11 Keyboard.*} 60
+
+set spawn_id $qemu_spawn_id
+
+# send Ctrl-a+c to enter Qemu's monitor mode
+send "\x01\x63"
+
+# wait for monitor to become ready
+run_genode_until {(qemu)} 20 $spawn_id
+
+for {set i 0} {$i < 50} {incr i} {
+
+	# connect keyboard
+	send "device_add usb-kbd,id=ukb$i\n"
+
+	# wait for keyboard
+	run_genode_until {.*USB HID.*Keyboard.*\n} 10 $spawn_id
+
+	# disconnect keyboard
+	send "device_del ukb$i\n"
+
+	# wait for disconnect
+	run_genode_until {.*USB disconnect.*\n} 10 $spawn_id
+
+}
+
+puts "\nTest succeeded\n"

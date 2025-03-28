@@ -1,0 +1,1165 @@
+#
+# \brief  Sculpt OS
+# \author Norman Feske
+# \date   2017-09-07
+#
+
+#
+# Note: the string must be exactly 5 bytes long.
+#
+proc sculpt_version { } { return "24.10" }
+
+
+proc assert_platform_supported { } {
+
+	if {[have_board pc]}          return
+	if {[have_board imx8q_evk]}   return
+	if {[have_board mnt_reform2]} return
+	if {[have_board mnt_pocket]}  return
+	if {[have_board linux]}       return
+	if {[have_board pinephone]}   return
+
+	puts "Platform is unsupported.";
+	exit 0;
+}
+
+assert_platform_supported
+
+
+proc log_core { } {
+
+	global ::env
+
+	if {[info exists ::env(LOG)]} {
+		if {$::env(LOG) == "core"} { return true }
+	}
+
+	return false
+}
+
+
+if {[log_core]} {
+	if {[have_spec nova]} {
+		proc kernel_output { } { return "serial logmem" }
+	}
+} else {
+	# disable default enabled serial log output via core
+	proc boot_output { } { return "" }
+
+	if {[have_spec nova]} {
+		proc kernel_output { } { return "logmem" }
+	}
+}
+
+
+##
+## Utilities for querying the ingredients of Sculpt
+##
+
+##
+# Return path to the sculpt definition file that contains the list of
+# ingredients
+#
+proc sculpt_path { } {
+
+	global ::env
+
+	set filename "default-[board].sculpt"
+	if {[info exists ::env(SCULPT)]} {
+		set filename "$::env(SCULPT)-[board].sculpt" }
+
+	return [select_from_repositories [file join sculpt $filename]]
+}
+
+
+##
+# Return list of ingredients of scenario supplied via the 'SCULPT' argument
+#
+# If 'SCULPT' is not specified, use 'sculpt/default.sculpt'.
+#
+proc sculpt_ingredients { } {
+
+	global _sculpt_ingredients
+
+	if {![info exists _sculpt_ingredients]} {
+		set fh [open [sculpt_path] "RDONLY"]
+		set _sculpt_ingredients [split [read $fh] "\n"]
+		close $fh
+	}
+
+	return $_sculpt_ingredients
+}
+
+
+proc ingredients_of_type { type } {
+
+	set result {}
+	set line 1
+	foreach i [sculpt_ingredients] {
+
+		# skip comment lines
+		if {[string match "#*" $i]} {
+			continue }
+
+		# skip empty lines
+		if {[string match "" $i]} {
+			continue }
+
+		regexp {^(.*?):\s*(.*)\s*$} $i dummy tag values
+
+		if {$tag == $type} {
+			lappend result {*}$values}
+
+		incr line
+	}
+	return $result
+}
+
+
+proc single_ingredient { type default } {
+
+	set ingredient [ingredients_of_type $type]
+
+	if {[llength $ingredient] == 0} {
+		return $default }
+
+	if {[llength $ingredient] > 1} {
+		puts stderr "Error: ambigious selection of '$type' in [sculpt_path]"
+		exit
+	}
+	return $ingredient
+}
+
+
+proc ingredient_path { type ingredient } {
+	return [select_from_repositories [file join sculpt $type $ingredient]] }
+
+proc initial_config_dir { } {
+	return [file join [run_dir] initial_config] }
+
+proc initial_config_file { rel_path } {
+	return [file join [initial_config_dir] $rel_path] }
+
+
+##
+## System-image content imported from depot archives
+##
+
+create_boot_directory
+
+
+proc prefixed_with_depot_user { paths } {
+	return [lmap path $paths { file join [depot_user] $path }] }
+
+
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/pkg/sculpt \
+                  {*}[prefixed_with_depot_user [ingredients_of_type import]]
+
+
+##
+## Static init configuration
+##
+
+proc log_route { } {
+
+	if {[log_core]} {
+		return {<service name="LOG"> <parent/> </service>} }
+
+	return {<service name="LOG"> <child name="log"/> </service>}
+}
+
+
+##
+# ROM routes that relabel generic driver names to platform-specific binaries
+#
+proc driver_routes { } {
+
+	set result(pc) {
+		<service name="ROM" label="nic">               <parent label="pc_nic"/> </service>
+		<service name="ROM" label="wifi.lib.so">       <parent label="pc_wifi.lib.so"/> </service>
+		<service name="ROM" label="wifi_firmware.tar"> <parent label="pc_wifi_firmware.tar"/> </service>
+		<service name="ROM" label="usb">               <parent label="pc_usb_host"/> </service>
+	}
+
+	set result(mnt_reform2) {
+		<service name="ROM" label="fb">                <parent label="imx8mq_fb"/> </service>
+		<service name="ROM" label="fb.dtb">            <parent label="imx8mq_fb-mnt_reform2.dtb"/> </service>
+		<service name="ROM" label="mmc">               <parent label="imx8mq_sd_card"/> </service>
+		<service name="ROM" label="mmc.dtb">           <parent label="imx8mq_sd_card-mnt_reform2.dtb"/> </service>
+		<service name="ROM" label="nic">               <parent label="fec_nic"/> </service>
+		<service name="ROM" label="nic.dtb">           <parent label="fec_nic-mnt_reform2.dtb"/> </service>
+		<service name="ROM" label="usb">               <parent label="imx8m_usb_host"/> </service>
+		<service name="ROM" label="usb.dtb">           <parent label="imx8m_usb_host-mnt_reform2.dtb"/> </service>
+		<service name="ROM" label="wifi.lib.so">       <parent label="imx8mq_wifi.lib.so"/> </service>
+		<service name="ROM" label="wifi_firmware.tar"> <parent label="imx8mq_wifi_firmware.tar"/> </service>
+		<service name="I2c"> <child name="drivers"/> </service>
+	}
+
+	set result(mnt_pocket) {
+		<service name="ROM" label="fb">                <parent label="imx8mq_fb"/> </service>
+		<service name="ROM" label="fb.dtb">            <parent label="imx8mq_fb-mnt_pocket.dtb"/> </service>
+		<service name="ROM" label="mmc">               <parent label="imx8mq_sd_card"/> </service>
+		<service name="ROM" label="mmc.dtb">           <parent label="imx8mq_sd_card-mnt_pocket.dtb"/> </service>
+		<service name="ROM" label="nic">               <parent label="stmmac_nic"/> </service>
+		<service name="ROM" label="nic.dtb">           <parent label="stmmac_nic-mnt_pocket.dtb"/> </service>
+		<service name="ROM" label="usb">               <parent label="imx8m_usb_host"/> </service>
+		<service name="ROM" label="usb.dtb">           <parent label="imx8m_usb_host-mnt_pocket.dtb"/> </service>
+		<service name="ROM" label="wifi.dtb">          <parent label="wifi-mnt_pocket.dtb"/> </service>
+		<service name="ROM" label="wifi.lib.so">       <parent label="imx8mp_qcacld2_wifi.lib.so"/> </service>
+		<service name="ROM" label="wifi_firmware.tar"> <parent label="imx8mp_qcacld2_wifi_firmware.tar"/> </service>
+		<service name="I2c"> <child name="drivers"/> </service>
+	}
+
+	set result(imx8q_evk) {
+		<service name="ROM" label="nic">     <parent label="fec_nic"/> </service>
+		<service name="ROM" label="nic.dtb"> <parent label="fec_nic-imx8q_evk.dtb"/> </service>
+	}
+
+	set result(pinephone) {
+		<service name="ROM" label="wifi.lib.so">       <parent label="a64_wifi.lib.so"/> </service>
+		<service name="ROM" label="wifi.dtb">          <parent label="wifi-pinephone.dtb"/> </service>
+		<service name="ROM" label="wifi_firmware.tar"> <parent label="a64_wifi_firmware.tar"/> </service>
+		<service name="ROM" label="usb">               <parent label="a64_usb_host"/> </service>
+		<service name="ROM" label="usb.dtb">           <parent label="usb-pinephone.dtb"/> </service>
+		<service name="ROM" label="mmc">               <parent label="a64_sd_card"/> </service>
+		<service name="ROM" label="mmc.dtb">           <parent label="sd_card-pinephone.dtb"/> </service>
+		<service name="ROM" label="fb">                <parent label="de_fb"/> </service>
+		<service name="ROM" label="fb.dtb">            <parent label="de-pinephone.dtb"/> </service>
+		<service name="ROM" label="touch">             <parent label="goodix_touch"/> </service>
+		<service name="ROM" label="touch.dtb">         <parent label="goodix-pinephone.dtb"/> </service>
+		<service name="IRQ" label_prefix="touch ->"> <child name="drivers" label="runtime -> touch -> PH4"/> </service>
+	}
+
+	if {[info exists result([board])]} {
+		return $result([board]); }
+
+	return "";
+}
+
+
+proc log_core_start_node { } {
+
+	if {[have_board linux]} return
+
+	return {
+	<start name="log_core" priority="-1">
+		<resource name="RAM" quantum="1M"/>
+		<config period_ms="2000"/>
+		<route>
+			<service name="ROM" label="log"> <parent label="core_log"/>       </service>
+			<service name="Timer">           <child name="timer"/>            </service>
+			<service name="LOG" label="log"> <child name="log" label="core"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>}
+}
+
+
+proc log_kernel_start_node { } {
+
+	if {![have_spec nova]} return
+
+	return {
+	<start name="log_kernel" priority="-1">
+		<binary name="log_core"/>
+		<resource name="RAM" quantum="1M"/>
+		<config period_ms="2000"/>
+		<route>
+			<service name="ROM" label="log"> <parent label="kernel_log"/>       </service>
+			<service name="Timer">           <child name="timer"/>              </service>
+			<service name="LOG" label="log"> <child name="log" label="kernel"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>}
+}
+
+
+install_config {
+<config prio_levels="2">
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+		<service name="TRACE"/>
+		<service name="VM"/>
+	</parent-provides>
+
+	<affinity-space width="2" height="1"/>
+
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+
+	<default caps="100"/>
+
+	<resource name="RAM" preserve="2M"/>
+
+	<start name="timer" priority="0">
+		<resource name="RAM" quantum="1M"/>
+		<resource name="CPU" quantum="5"/>
+		<provides><service name="Timer"/></provides>
+	</start>
+
+	<start name="report_rom" priority="-1">
+		<binary name="report_rom"/>
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config verbose="no">
+			<policy label="leitzentrale_config -> leitzentrale"
+			        report="global_keys_handler -> leitzentrale"/>
+			<policy label="leitzentrale -> manager -> leitzentrale"
+			        report="global_keys_handler -> leitzentrale"/>
+			<policy label="pointer -> hover" report="nitpicker -> hover"/>
+			<policy label="pointer -> xray"
+			        report="global_keys_handler -> leitzentrale"/>
+			<policy label="pointer -> shape"    report="shape"/>
+			<policy label="clipboard -> focus"  report="nitpicker -> focus"/>
+			<policy label="runtime -> capslock" report="global_keys_handler -> capslock"/>
+			<policy label="runtime -> numlock"  report="global_keys_handler -> numlock"/>
+			<policy label="numlock_remap_rom -> numlock" report="global_keys_handler -> numlock"/>
+			<policy label="event_filter -> capslock" report="global_keys_handler -> capslock"/>
+			<policy label="runtime -> clicked"  report="nitpicker -> clicked"/>
+			<policy label="leitzentrale -> manager -> nitpicker_focus" report="nitpicker -> focus"/>
+			<policy label="leitzentrale -> manager -> nitpicker_hover" report="nitpicker -> hover"/>
+			<policy label="nit_focus -> leitzentrale"
+			        report="global_keys_handler -> leitzentrale"/>
+			<policy label="nit_focus -> slides"
+			        report="global_keys_handler -> slides"/>
+			<policy label="nit_focus -> hover" report="nitpicker -> hover"/>
+			<policy label="slides_gui_fb_config -> slides"
+			        report="global_keys_handler -> slides"/>
+		</config>
+	</start>
+
+	<start name="report_logger" priority="-1">
+		<binary name="report_rom"/>
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config verbose="yes"/>
+	</start>
+
+	<start name="config_fs" caps="200" priority="-1">
+		<binary name="vfs"/>
+		<resource name="RAM" quantum="12M"/>
+		<provides> <service name="File_system"/> </provides>
+		<config>
+			<vfs>
+				<ram/>
+				<import> <tar name="initial_config.tar"/> </import>
+			</vfs>
+			<policy label="config_fs_rom -> " root="/" />
+			<policy label="rw"                root="/" writeable="yes" />
+		</config>
+	</start>
+
+	<start name="config_fs_rom" priority="-1">
+		<binary name="fs_rom"/>
+		<resource name="RAM" quantum="10M"/>
+		<provides> <service name="ROM"/> </provides>
+		<route>
+			<service name="File_system"> <child name="config_fs"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="report_fs_rom" priority="-1">
+		<binary name="fs_rom"/>
+		<resource name="RAM" quantum="3M"/>
+		<provides> <service name="ROM"/> </provides>
+		<route>
+			<service name="File_system"> <child name="report_fs"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="report_fs" priority="-1">
+		<binary name="vfs"/>
+		<resource name="RAM" quantum="16M"/>
+		<provides> <service name="File_system"/> </provides>
+		<config>
+			<vfs>
+				<ram/>
+				<import>
+					<inline name="log">### start ###</inline>
+					<dir name="runtime">
+						<inline name="state"><empty/></inline>
+						<dir name="nic_router"> <inline name="state">    <empty/></inline> </dir>
+						<dir name="update">     <inline name="state">    <empty/></inline> </dir>
+						<dir name="depot_query"><inline name="blueprint"><empty/></inline> </dir>
+					</dir>
+				</import>
+			</vfs>
+			<policy label="fs_report -> "     root="/" writeable="yes"/>
+			<policy label="log_terminal -> "  root="/" writeable="yes"/>
+			<policy label="report_fs_rom -> " root="/"/>
+			<policy label="ro"                root="/"/>
+		</config>
+	</start>
+
+	<start name="log_terminal" priority="-1">
+		<binary name="file_terminal"/>
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Terminal"/> </provides>
+		<config>
+			<default-policy filename="log" />
+			<vfs> <dir name="dev"> <log/> </dir> <fs/> </vfs>
+			<libc stdout="/dev/log"/>
+		</config>
+		<route>
+			<service name="File_system"> <child name="report_fs"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="log" priority="-1">
+		<binary name="terminal_log"/>
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="LOG"/> </provides>
+		<config/>
+		<route>
+			<service name="Terminal"> <child name="log_terminal"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	} [log_core_start_node] {
+	} [log_kernel_start_node] {
+
+	<start name="fs_report" priority="-1">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> </provides>
+		<config> <vfs> <fs/> </vfs> </config>
+		<route>
+			<service name="File_system"> <child name="report_fs"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="drivers" caps="4850" priority="-1" managing_system="yes">
+		<resource name="RAM" quantum="200M"/>
+		<resource name="CPU" quantum="5"/>
+		<binary name="init"/>
+		<route>
+			} [log_route] {
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="drivers"/> </service>
+			<service name="ROM" label_last="gpu.config">
+				<child name="config_fs_rom" label="gpu"/> </service>
+			<service name="ROM" label_last="system">
+				<child name="config_fs_rom" label="managed/system"/> </service>
+			<service name="ROM" label_last="modem.config">
+				<child name="config_fs_rom" label="managed/modem"/> </service>
+			<service name="ROM" label_last="audio.config">
+				<child name="config_fs_rom" label="managed/audio"/> </service>
+			<service name="ROM" label_last="sleep_states">
+				<child name="report_fs_rom" label="runtime/acpi_support/sleep_states"/> </service>
+			<service name="Timer">   <child name="timer"/> </service>
+			<service name="Capture"> <child name="nitpicker"/> </service>
+			<service name="Event">   <child name="event_filter"/> </service>
+			<service name="Report">  <child name="fs_report"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+		<provides>
+			<service name="Platform"/>
+			<service name="Pin_state"/>
+			<service name="Pin_control"/>
+			<service name="I2c"/>
+			<service name="IRQ"/>
+		</provides>
+	</start>
+
+	<start name="nitpicker" caps="1000" priority="-1">
+		<resource name="RAM" quantum="18M"/>
+		<resource name="CPU" quantum="10"/>
+		<affinity xpos="1" width="1"/> <!-- decouple nitpicker from boot CPU -->
+		<provides>
+			<service name="Gui"/> <service name="Capture"/> <service name="Event"/>
+		</provides>
+		<route>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="managed/nitpicker"/> </service>
+			<service name="ROM" label="focus">
+				<child name="nit_focus"/> </service>
+			<service name="Report" label="panorama">
+				<child name="fs_report"/> </service>
+			<service name="Report" label="keystate">
+				<child name="report_logger"/> </service>
+			<service name="Report"> <child name="report_rom"/> </service>
+			<service name="Timer">  <child name="timer"/>      </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<!-- toggle key mappings depending on the numlock state -->
+	<start name="numlock_remap_rom" priority="-1">
+		<binary name="rom_filter"/>
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="ROM"/> </provides>
+		<route>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="numlock_remap"/> </service>
+			<service name="ROM" label="numlock"> <child name="report_rom"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="event_filter" priority="-1" caps="120">
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Event"/> </provides>
+		<route>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="managed/event_filter"/> </service>
+			<service name="ROM" label_prefix="keyboard/">
+				<child name="config_fs_rom"/> </service>
+			<service name="ROM" label="numlock.remap"> <child name="numlock_remap_rom"/> </service>
+			<service name="ROM" label="capslock">      <child name="report_rom"/> </service>
+			<service name="ROM">   <parent/> </service>
+			<service name="PD">    <parent/> </service>
+			<service name="CPU">   <parent/> </service>
+			<service name="LOG">   <parent/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="Event"> <child name="nitpicker"/> </service>
+		</route>
+	</start>
+
+	<!-- override user focus when leitzentrale is active -->
+	<start name="nit_focus" priority="-1">
+		<binary name="rom_filter"/>
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="ROM"/> </provides>
+		<config>
+			<input name="lockscreen_enabled" rom="hover" node="hover">
+				<attribute name="label" /> </input>
+			<input name="leitzentrale_enabled" rom="leitzentrale" node="leitzentrale">
+				<attribute name="enabled" /> </input>
+			<input name="slides_enabled" rom="slides" node="slides">
+				<attribute name="enabled" /> </input>
+			<output node="focus">
+				<if>
+					<has_value input="lockscreen_enabled" value="lock_screen" />
+					<then>
+						<attribute name="label" value="lock_screen"/>
+					</then>
+					<else>
+						<if>
+							<has_value input="leitzentrale_enabled" value="yes" />
+							<then>
+								<attribute name="label" value="leitzentrale -> manager -> fader -> "/>
+							</then>
+							<else>
+								<if>
+									<has_value input="slides_enabled" value="yes" />
+									<then>
+										<attribute name="label" value="slides"/>
+									</then>
+									<else>
+										<attribute name="label" value="runtime -> focus"/>
+									</else>
+								</if>
+							</else>
+						</if>
+					</else>
+				</if>
+			</output>
+		</config>
+		<route>
+			<service name="ROM" label="hover">        <child name="report_rom"/> </service>
+			<service name="ROM" label="leitzentrale"> <child name="report_rom"/> </service>
+			<service name="ROM" label="slides">       <child name="report_rom"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="pointer" priority="-1">
+		<resource name="RAM" quantum="2M"/>
+		<provides> <service name="Report"/> </provides>
+		<config shapes="yes"/>
+		<route>
+			<service name="Gui"> <child name="nitpicker"/>  </service>
+			<service name="ROM" label="hover"> <child name="report_rom"/> </service>
+			<service name="ROM" label="xray">  <child name="report_rom"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="global_keys_handler" priority="-1">
+		<resource name="RAM" quantum="1M"/>
+		<route>
+			<service name="Report"> <child name="report_rom"/> </service>
+			<service name="Gui">    <child name="nitpicker"/>  </service>
+			<service name="Timer">  <child name="timer"/>      </service>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="global_keys"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="leitzentrale_config" priority="-1">
+		<binary name="rom_filter"/>
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="ROM"/></provides>
+		<route>
+			<service name="ROM" label="leitzentrale"> <child name="report_rom"/> </service>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="leitzentrale"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="clipboard" priority="-1">
+		<resource name="RAM" quantum="2M"/>
+		<provides>
+			<service name="ROM"/> <service name="Report"/>
+		</provides>
+		<route>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="clipboard"/> </service>
+			<service name="ROM" label="focus"> <child name="report_rom"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="leitzentrale" caps="2400" priority="-1">
+		<binary name="init"/>
+		<resource name="RAM" quantum="203M"/>
+		<resource name="CPU" quantum="10"/>
+		<affinity xpos="1" width="1"/> <!-- decouple leitzentrale from boot CPU -->
+		<provides>
+			<service name="Gui"/>
+			<service name="Capture"/>
+			<service name="Event"/>
+			<service name="File_system"/> <!-- fonts -->
+			<service name="ROM"/>         <!-- view dialog ROMs -->
+			<service name="Report"/>      <!-- view hover reports -->
+		</provides>
+		<route>
+			} [log_route] {
+			<service name="ROM" label="config">
+				<child name="leitzentrale_config"/> </service>
+			<service name="ROM" label_prefix="report -> ">
+				<child name="report_fs_rom"/> </service>
+			<service name="ROM" label_prefix="manager -> report -> ">
+				<child name="report_fs_rom"/> </service>
+			<service name="ROM" label_prefix="manager -> config -> ">
+				<child name="config_fs_rom"/> </service>
+			<service name="ROM" label_prefix="config -> ">
+				<child name="config_fs_rom"/> </service>
+			<service name="ROM" label="manager -> nitpicker_focus">
+				<child name="report_rom"/> </service>
+			<service name="ROM" label="manager -> nitpicker_hover">
+				<child name="report_rom"/> </service>
+			<service name="ROM" label="manager -> leitzentrale">
+				<child name="report_rom"/> </service>
+			<service name="Report"> <child name="fs_report"/> </service>
+			<service name="Gui"> <child name="nitpicker"/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="File_system" label="config">
+				<child name="config_fs" label="rw"/> </service>
+			<service name="File_system" label="report">
+				<child name="report_fs" label="ro"/> </service>
+			<service name="File_system" label="report">
+				<child name="report_fs" label="ro"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="terminal_monitor" priority="-1">
+		<binary name="terminal_crosslink"/>
+		<resource name="RAM" quantum="2M"/>
+		<provides>
+			<service name="Terminal"/>
+		</provides>
+	</start>
+
+	<start name="runtime" caps="50000" priority="-1" managing_system="yes">
+		<binary name="monitor"/>
+		<resource name="RAM" quantum="32G"/>
+		<resource name="CPU" quantum="70"/>
+		<route>
+			<service name="ROM" label="config">
+				<child name="config_fs_rom" label="managed/runtime"/> </service>
+			<service name="ROM" label_prefix="config -> ">
+				<child name="config_fs_rom"/> </service>
+			<service name="ROM" label_prefix="report -> ">
+				<child name="report_fs_rom"/> </service>
+			<service name="ROM" label="capslock">
+				<child name="report_rom"/> </service>
+			<service name="ROM" label="numlock">
+				<child name="report_rom"/> </service>
+			<service name="ROM" label="clicked">
+				<child name="report_rom"/> </service>
+			<service name="File_system" label="config">
+				<child name="config_fs" label="rw"/> </service>
+			<service name="File_system" label="report">
+				<child name="report_fs" label="ro"/> </service>
+			<service name="Platform" label_prefix="acpica">
+				<child name="drivers" label="acpica"/> </service>
+			<service name="Platform"> <child name="drivers"/> </service>
+			<service name="Gui" label_prefix="leitzentrale">
+				<child name="leitzentrale"/> </service>
+			<service name="Gui" label="backdrop">
+				<child name="nitpicker" label="backdrop"/> </service>
+			<service name="Gui" label="lock_screen">
+				<child name="nitpicker" label="lock_screen"/> </service>
+			<service name="Gui"> <child name="nitpicker"/> </service>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="Report" label_suffix="-> shape"> <child name="pointer"/> </service>
+			<service name="Report" label="inspect -> clipboard">
+				<child name="clipboard" label="leitzentrale -> manager -> fader ->  -> clipboard"/> </service>
+			<service name="Report" label="editor -> clipboard">
+				<child name="clipboard" label="leitzentrale -> manager -> fader ->  -> clipboard"/> </service>
+			<service name="ROM" label="inspect -> clipboard">
+				<child name="clipboard" label="leitzentrale -> manager -> fader ->  -> clipboard"/> </service>
+			<service name="ROM" label="editor -> clipboard">
+				<child name="clipboard" label="leitzentrale -> manager -> fader ->  -> clipboard"/> </service>
+			<service name="Report" label_suffix="-> clipboard"> <child name="clipboard"/> </service>
+			<service name="ROM"    label_suffix="-> clipboard"> <child name="clipboard"/> </service>
+			<service name="Report" label_prefix="leitzentrale ->">
+				<child name="leitzentrale"/> </service>
+			<service name="ROM" label_prefix="leitzentrale ->">
+				<child name="leitzentrale"/> </service>
+			<service name="File_system" label="leitzentrale -> fonts">
+				<child name="leitzentrale" label="fonts"/> </service>
+			<service name="Report"> <child name="fs_report"/> </service>
+			<service name="LOG" label="unlogged"> <parent/> </service>
+			} [log_route] [driver_routes] {
+			<service name="Event" label="leitzentrale"> <child name="leitzentrale"/> </service>
+			<service name="Event"> <child name="event_filter"/> </service>
+			<service name="Capture" label="leitzentrale"> <child name="leitzentrale"/> </service>
+			<service name="Capture">                      <child name="nitpicker"/>    </service>
+			<service name="Pin_state">   <child name="drivers"/> </service>
+			<service name="Pin_control"> <child name="drivers"/> </service>
+			<service name="Terminal"> <child name="terminal_monitor"/> </service>
+			<service name="TRACE" label="runtime"> <parent label="runtime -> "/> </service>
+			<service name="TRACE" label="global">  <parent label=""/>        </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+</config>}
+
+
+##
+## Initial content of the config file system
+##
+
+#
+# The directory structure for the initial content is created at the run
+# directory, which is imported as 'initial_config.tar' into the config fs.
+#
+
+# directory structure
+foreach subdir { launcher depot managed keyboard } {
+	file mkdir [file join [initial_config_dir] $subdir] }
+
+if {[llength [ingredients_of_type presets]] > 0} {
+	file mkdir [file join [initial_config_dir] presets] }
+
+# configs that are managed by the sculpt manager if absent
+set optional_configs {
+	fonts
+	nic_router
+	event_filter
+	wifi
+	runtime
+	gpu
+}
+
+foreach config $optional_configs {
+	set ingredient [single_ingredient $config ""]
+	if {$ingredient != ""} {
+		set from [ingredient_path $config $ingredient]
+		set to   [initial_config_file $config]
+		copy_file $from $to } }
+
+# configs that are expected to be always present
+set required_configs {
+	nitpicker
+	deploy
+	fb
+	clipboard
+	drivers
+	numlock_remap
+	global_keys
+	leitzentrale
+	usb
+	system
+	ram_fs
+	manager
+}
+
+foreach config $required_configs {
+	set ingredient [single_ingredient $config "default"]
+	set from [ingredient_path $config $ingredient]
+	set to   [initial_config_file $config]
+	check_xml_syntax $from
+	copy_file $from $to
+}
+
+# selection of depot users (pubkey and download files), launchers, and presets
+foreach ingredient [ingredients_of_type launcher] {
+	check_xml_syntax [ingredient_path launcher $ingredient] }
+
+foreach ingredient [ingredients_of_type presets] {
+	check_xml_syntax [ingredient_path deploy $ingredient] }
+
+foreach type { depot launcher } {
+	foreach ingredient [ingredients_of_type $type] {
+		set from [ingredient_path $type $ingredient]
+		set to   [file join [initial_config_dir] $type $ingredient]
+		file copy $from $to } }
+
+foreach ingredient [ingredients_of_type presets] {
+	set from [ingredient_path deploy $ingredient]
+	set to   [file join [initial_config_dir] presets $ingredient]
+	file copy $from $to }
+
+copy_file [genode_dir]/repos/gems/recipes/pkg/sculpt/README [initial_config_file README]
+copy_file [genode_dir]/repos/gems/run/sculpt/vimrc          [initial_config_file vimrc]
+
+# keyboard layouts
+foreach file { en_us de_ch de_de fr_ch fr_fr fr_bepo special } {
+	set from [genode_dir]/repos/os/src/server/event_filter/$file.chargen
+	set to   [file join [initial_config_dir] keyboard $file]
+	check_xml_syntax $from
+	copy_file $from $to }
+
+
+#
+# Pre-populate the managed/ directory of the config fs to avoid diagnostic
+# warnings by components starting up before the sculpt manager has generated
+# the directory content for the first time.
+#
+
+proc managed_config_path { name } {
+	return [file join [initial_config_dir] managed $name] }
+
+set fd [open [managed_config_path installation] w]
+puts $fd "<installation arch=\"[depot_spec]\"/>"
+close $fd
+
+set fd [open [managed_config_path depot_query] w]
+puts $fd "<query/>"
+close $fd
+
+foreach config { fonts wifi runtime event_filter system nitpicker } {
+	set ingredient [single_ingredient $config "default"]
+	if {$ingredient != ""} {
+		set from [ingredient_path $config $ingredient]
+		set to   [managed_config_path $config]
+		check_xml_syntax $from
+		copy_file $from $to
+	}
+}
+
+copy_file [file join [initial_config_dir] fb] [managed_config_path fb]
+
+
+#
+# VERSION file at the root of the config fs, add newline for 'cat /VERSION'
+#
+
+set fd [open [initial_config_file VERSION] w]
+puts $fd "[sculpt_version]"
+close $fd
+
+# supply VERSION as a boot module to the sculpt manager
+file copy [initial_config_file VERSION] [run_dir]/genode/VERSION
+
+
+#
+# Generate build info as boot module
+#
+
+proc build_date { } { return [clock format [clock seconds] -format %Y-%m-%d] }
+
+proc genode_version { } {
+
+	if {[have_installed git] && [file exists [file join [genode_dir] .git]]} {
+		return [exec [installed_command git] -C [genode_dir] describe \
+		       {--dirty= <local changes>} 2> /dev/null] }
+
+	set fh [open [file join [genode_dir] VERSION] "RDONLY"]
+	set version [read $fh]
+	close $fh
+
+	regsub -all {\s} $version "" version
+	return $version
+}
+
+set    build_info "<build_info"
+append build_info " genode_version=\"[genode_version]\""
+append build_info " date=\"[build_date]\""
+append build_info " depot_user=\"[depot_user]\""
+append build_info " board=\"$board_var\""
+append build_info " base=\"[depot_user]/bin/[depot_spec]/[base_src]/[_current_depot_archive_version src [base_src]]\"/"
+append build_info ">"
+
+set fd [open [run_dir]/genode/build_info w]
+puts $fd $build_info
+close $fd
+
+
+##
+# Return list of 'pkg' attribute values found in 'type' nodes in an XML file
+#
+proc pkg_attribute_values { xml_file node_path } {
+
+	set xpath "$node_path/attribute::pkg"
+	set values {}
+
+	if {[catch {
+		foreach attr [exec xmllint --xpath $xpath $xml_file] {
+			regexp {^pkg="(.*)"$} $attr dummy value
+			lappend values $value
+		}
+	}]} {
+		# no pkg attribute present in 'xml_file'
+	}
+	return $values
+}
+
+
+##
+# Return list of pkg archives reference by the launchers and deploy config
+#
+proc referenced_pkg_values { } {
+
+	set values {}
+
+	# scan launchers
+	foreach launcher [ingredients_of_type launcher] {
+		set path [file join [initial_config_dir] launcher $launcher]
+		lappend values {*}[pkg_attribute_values $path launcher]
+	}
+
+	# scan presets
+	foreach preset [ingredients_of_type presets] {
+		set path [file join [initial_config_dir] presets $preset]
+		lappend values {*}[pkg_attribute_values $path config/start]
+	}
+
+	# scan deploy config
+	lappend values {*}[pkg_attribute_values [initial_config_file deploy] config/start]
+
+	return [lsort -unique $values]
+}
+
+
+#
+# Replace pkg values of the form "name" by the form "user/pkg/name" suitable as
+# arguments for '_collect_from_depot'.
+#
+proc pkg_archive_paths { values } {
+
+	set result {}
+	foreach value $values {
+		if {[regexp {/} $value dummy]} {
+			lappend result $value
+		} else {
+			lappend result "[depot_user]/pkg/$value"
+		}
+	}
+	return $result
+}
+
+
+##
+# Return which kind of depot archive is wanted: 'tar', 'omit', or 'list'
+#
+# tar  - includes the depot content referenced by the deploy configuration as
+#        tar archive named 'depot.tar'
+#
+# omit - skips the evaluation of the deploy configuration
+#
+# list - outputs the list of packages needed for the deployment, which can
+#        taken as input for manually publishing those packages
+#
+proc depot_archive { } {
+
+	global ::env
+
+	set archive "tar"
+	if {[info exists ::env(DEPOT)]} {
+		set archive "$::env(DEPOT)" }
+
+	if {$archive != "omit" && $archive != "tar" && $archive != "list"} {
+		puts stderr "Error: invalid value of DEPOT=$archive variable!" }
+
+	return $archive
+}
+
+
+#
+# Trigger the creation / updating of referenced depot content
+#
+# This step may update pkg versions if '--depot-auto-update' is enabled.
+#
+if {[depot_archive] == "tar" || [depot_archive] == "list"} {
+	_collect_from_depot [pkg_archive_paths [referenced_pkg_values]]
+}
+
+
+#
+# Augment deploy config or launcher file with current package versions
+#
+
+proc current_pkg { pkg } { return $pkg/[_current_depot_archive_version pkg $pkg] }
+
+
+#
+# Supplement file with versioned pkg archive paths
+#
+# \path  deploy config, or launcher, or preset to augment
+# \node  XML node type containing the 'pkg' attribute to modify
+#
+# Each matching XML node is inspected regarding its 'pkg' attribute. If its
+# 'pkg' attribute contains a single identifier (rather than a valid pkg path),
+# the attribute value is replaced by a valid pkg path referring to the current
+# version of the pkg and the [depot_user].
+#
+proc augment_pkg_versions { path node } {
+
+	set fd [open $path r]
+	set content [read $fd]
+	close $fd
+
+	# filter 'pkg' attribute that is not <user>/pkg/<
+	set pattern "(\<$node\[^\>]+?pkg=\")"
+	append pattern {(?![\w\d\-]+/pkg/[\w\d\-_]+/[\w\d\-\._]+)(.*)}
+	append pattern "(\")"
+	while {[regexp $pattern $content dummy head pkg tail]} {
+		if {[regexp [_depot_archive_path_pattern] $pkg dummy user type name]
+		    && $type == "pkg"} {
+				set pkg_path $user/pkg/[current_pkg $name]
+				regsub $pattern $content "$head$pkg_path$tail" content
+		} elseif {![regexp {/} $pkg dummy]} {
+			set pkg_path [depot_user]/pkg/[current_pkg $pkg]
+			regsub $pattern $content "$head$pkg_path$tail" content
+		} else {
+			puts stderr "Error: malformed depot-archive path '$pkg',"
+			puts stderr "       expected '<user>/pkg/<name>' or"
+			puts stderr "                '<name>' or"
+			puts stderr "                '<user>/pkg/<name>/<version>'"
+			exit
+		}
+	}
+
+	# write back the filtered launcher snippet, deploy config, or preset
+	set fd [open $path w]
+	puts $fd $content
+	close $fd
+}
+
+
+# launcher snippets
+foreach launcher [ingredients_of_type launcher] {
+	augment_pkg_versions [file join [initial_config_dir] launcher $launcher] "launcher" }
+
+# presets
+foreach preset [ingredients_of_type presets] {
+	augment_pkg_versions [file join [initial_config_dir] presets $preset] "start" }
+
+# deploy config
+augment_pkg_versions [initial_config_file deploy] "start"
+
+# update arch attribute of deploy config and presets
+proc augment_arch_attribute { file } {
+	exec sed -i "/config/s/arch=\"\"/arch=\"[depot_spec]\"/" $file }
+
+foreach preset [ingredients_of_type presets] {
+	augment_arch_attribute [file join [initial_config_dir] presets $preset] }
+
+augment_arch_attribute [initial_config_file deploy]
+
+
+##
+## Depot content integrated in the Sculpt image
+##
+
+proc create_depot_archive { } {
+
+	if {[depot_archive] == "tar"} {
+		create_tar_from_depot_binaries [run_dir]/genode/depot.tar \
+                               {*}[pkg_archive_paths [referenced_pkg_values]]
+
+	} elseif {[depot_archive] == "list"} {
+		puts "Do not forget to publish:"
+		puts [pkg_archive_paths [referenced_pkg_values]]
+	}
+}
+
+create_depot_archive
+
+
+#
+# Create initial_config.tar to be mounted at the root of the config fs
+#
+
+exec sh -c "tar cf [run_dir]/genode/initial_config.tar -C [initial_config_dir] ."
+
+file delete -force [initial_config_dir]
+
+
+##
+## Auxiliary boot modules
+##
+
+#
+# Linux-specific tweaks
+#
+if {[have_board linux]} {
+
+	#
+	# The Linux version of core does not export a platform_info ROM module.
+	#
+	install_boot_module "platform_info" {<platform/>}
+
+	#
+	# Managed dataspaces as used by cached_fs_rom are not supported on Linux.
+	#
+	copy_file [run_dir]/genode/fs_rom [run_dir]/genode/cached_fs_rom
+}
+
+# support for the Leitzentrale GUI
+copy_file [genode_dir]/repos/gems/src/app/backdrop/genode_logo.png [run_dir]/genode/
+copy_file [genode_dir]/repos/gems/run/sculpt/drop_shadow.png       [run_dir]/genode/
+
+
+#
+# Generate depot index from gems/run/sculpt/index
+#
+
+set fd [open [genode_dir]/repos/gems/run/sculpt/index r]
+set pkg_index [read $fd]
+close $fd
+
+# filter 'pkg' attribute
+set pattern {(\<pkg[^\>]+?path=")([^/]+)(")}
+while {[regexp $pattern $pkg_index dummy head pkg tail]} {
+	set pkg_path [depot_user]/pkg/[current_pkg $pkg]
+	regsub $pattern $pkg_index "$head$pkg_path$tail" pkg_index
+}
+
+# write filtered pkg index into the depot
+file mkdir [depot_dir]/[depot_user]/index
+set fd [open [depot_dir]/[depot_user]/index/[sculpt_version] w]
+puts $fd $pkg_index
+close $fd
+
+
+##
+## Create boot image
+##
+
+build [ingredients_of_type build]
+
+append boot_modules [build_artifacts]
+
+build_boot_image $boot_modules

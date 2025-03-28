@@ -1,0 +1,55 @@
+source ${genode_dir}/repos/libports/run/qt5_common.inc
+
+import_from_depot [depot_user]/src/qt5_component \
+                  [depot_user]/src/qt5_declarative \
+                  [depot_user]/src/qt5_quickcontrols2 \
+                  [depot_user]/src/qt5_svg \
+                  [depot_user]/src/qt5_virtualkeyboard \
+                  [depot_user]/src/qt5_virtualkeyboard_example
+
+install_config {
+<config>
+	<parent-provides>
+		} [qt5_parent_provides] {
+	</parent-provides>
+	<default caps="300"/>
+	<default-route>
+		<any-service> <parent/> <child name="wm"/> <any-child/> </any-service>
+	</default-route>
+	} [qt5_start_nodes] {
+	<start name="basic" caps="500">
+		<resource name="RAM" quantum="100M"/>
+		<config>
+			<vfs>
+				<dir name="dev">
+					<log/>
+					<inline name="rtc">2018-01-01 00:01</inline>
+				</dir>
+				<dir name="pipe"> <pipe/> </dir>
+				<tar name="qt5_dejavusans.tar"/>
+				<tar name="qt5_declarative_qml.tar"/>
+				<tar name="qt5_libqgenode.tar"/>
+				<tar name="qt5_libqsvg.tar"/>
+				<tar name="qt5_libqtvirtualkeyboardplugin.tar"/>
+				<tar name="qt5_quickcontrols2_qml.tar"/>
+				<tar name="qt5_virtualkeyboard_qml.tar"/>
+			</vfs>
+			<libc stdout="/dev/log" stderr="/dev/log" pipe="/pipe" rtc="/dev/rtc"/>
+		</config>
+		<route>
+			<service name="Gui"> <child name="wm"/> </service>
+			<service name="Report" label="shape">
+				<child name="pointer" label="wm -> basic -> shape"/>
+			</service>
+			<service name="ROM" label="mesa_gpu.lib.so">
+				<parent label="mesa_gpu-softpipe.lib.so" />
+			</service>
+			<any-service> <parent /> <any-child/> </any-service>
+		</route>
+	</start>
+</config>
+}
+
+build_boot_image [qt5_boot_modules]
+
+run_genode_until forever

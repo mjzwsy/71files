@@ -1,0 +1,207 @@
+config.patch
+
+From: Sebastian Sumpf <sebastian.sumpf@genode-labs.com>
+
+
+---
+ gcc/config.gcc               |    2 +-
+ gcc/config/arm/arm.h         |    4 ++--
+ gcc/config/arm/unknown-elf.h |   13 +++++++++++++
+ gcc/config/i386/x86-64.h     |   19 +++++++++++++++++--
+ gcc/config/riscv/elf.h       |    2 ++
+ gcc/config/riscv/riscv.h     |   17 +++++++++++++++--
+ libgcc/config.host           |   16 ++++++++++++----
+ 7 files changed, 62 insertions(+), 11 deletions(-)
+
+diff --git a/gcc/config.gcc b/gcc/config.gcc
+index c5064dd37..d98f66763 100644
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -1364,7 +1364,7 @@ arm*-*-eabi* | arm*-*-symbianelf* | arm*-*-rtems* | arm*-*-fuchsia*)
+ 	case ${target} in
+ 	arm*-*-eabi*)
+ 	  tm_file="$tm_file newlib-stdint.h"
+-	  tmake_file="${tmake_file} arm/t-bpabi"
++	  tmake_file="${tmake_file} arm/t-bpabi t-slibgcc"
+ 	  use_gcc_stdint=wrap
+ 	  ;;
+ 	arm*-*-fuchsia*)
+diff --git a/gcc/config/arm/arm.h b/gcc/config/arm/arm.h
+index f47954081..907281781 100644
+--- a/gcc/config/arm/arm.h
++++ b/gcc/config/arm/arm.h
+@@ -753,11 +753,11 @@ extern const int arm_arch_cde_coproc_bits[];
+ #define MAX_FIXED_MODE_SIZE 64
+ 
+ #ifndef SIZE_TYPE
+-#define SIZE_TYPE (TARGET_AAPCS_BASED ? "unsigned int" : "long unsigned int")
++#define SIZE_TYPE (TARGET_AAPCS_BASED ? "long unsigned int" : "long unsigned int")
+ #endif
+ 
+ #ifndef PTRDIFF_TYPE
+-#define PTRDIFF_TYPE (TARGET_AAPCS_BASED ? "int" : "long int")
++#define PTRDIFF_TYPE (TARGET_AAPCS_BASED ? "long int" : "long int")
+ #endif
+ 
+ /* AAPCS requires that structure alignment is affected by bitfields.  */
+diff --git a/gcc/config/arm/unknown-elf.h b/gcc/config/arm/unknown-elf.h
+index bfb294bea..f83897fb0 100644
+--- a/gcc/config/arm/unknown-elf.h
++++ b/gcc/config/arm/unknown-elf.h
+@@ -93,4 +93,17 @@
+    udivmoddi4, which will depend on the exception unwind routines,
+    which will depend on abort, which is defined in libc.  */ 
+ #undef LINK_GCC_C_SEQUENCE_SPEC
++
+ #define LINK_GCC_C_SEQUENCE_SPEC "--start-group %G %{!nolibc:%L} --end-group"
++
++/* genode.h */
++
++/*
++ * The 'LINK_SPEC' define comprises the rules of how the GCC frontend invokes
++ * the linker.
++ */
++
++#undef LINK_SPEC
++#define LINK_SPEC \
++  "%(shared:-shared) \
++   %{!static:--eh-frame-hdr}"
+diff --git a/gcc/config/i386/x86-64.h b/gcc/config/i386/x86-64.h
+index 065269908..f1c34d76e 100644
+--- a/gcc/config/i386/x86-64.h
++++ b/gcc/config/i386/x86-64.h
+@@ -37,10 +37,10 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+ #define MCOUNT_NAME "mcount"
+ 
+ #undef SIZE_TYPE
+-#define SIZE_TYPE (TARGET_LP64 ? "long unsigned int" : "unsigned int")
++#define SIZE_TYPE (TARGET_LP64 ? "long unsigned int" : "long unsigned int")
+ 
+ #undef PTRDIFF_TYPE
+-#define PTRDIFF_TYPE (TARGET_LP64 ? "long int" : "int")
++#define PTRDIFF_TYPE (TARGET_LP64 ? "long int" : "long int")
+ 
+ #undef WCHAR_TYPE
+ #define WCHAR_TYPE "int"
+@@ -89,3 +89,18 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+ 
+ #undef TARGET_SECTION_TYPE_FLAGS
+ #define TARGET_SECTION_TYPE_FLAGS  x86_64_elf_section_type_flags
++
++/* genode64.h */
++
++/*
++ * The 'LINK_SPEC' macro expresses the policy of how the GCC
++ * frontend invokes 'ld' on multiarch platforms. I.e., on x86, we need to pass
++ * '-melf_i386' to 'ld' when building in '-m32' mode.
++ */
++
++#undef LINK_SPEC
++#define LINK_SPEC \
++  "%{!m32:-m elf_x86_64} \
++   %{m32:-m elf_i386} \
++   %{shared:-shared} \
++   %{!static:--eh-frame-hdr}"
+diff --git a/gcc/config/riscv/elf.h b/gcc/config/riscv/elf.h
+index f0e865d6e..30e976371 100644
+--- a/gcc/config/riscv/elf.h
++++ b/gcc/config/riscv/elf.h
+@@ -17,12 +17,14 @@ You should have received a copy of the GNU General Public License
+ along with GCC; see the file COPYING3.  If not see
+ <http://www.gnu.org/licenses/>.  */
+ 
++#ifndef LINK_SPEC
+ #define LINK_SPEC "\
+ -melf" XLEN_SPEC DEFAULT_ENDIAN_SPEC "riscv \
+ %{mno-relax:--no-relax} \
+ %{mbig-endian:-EB} \
+ %{mlittle-endian:-EL} \
+ %{shared}"
++#endif
+ 
+ /* Link against Newlib libraries, because the ELF backend assumes Newlib.
+    Handle the circular dependence between libc and libgloss. */
+diff --git a/gcc/config/riscv/riscv.h b/gcc/config/riscv/riscv.h
+index b3eb6abc2..ccd718a3d 100644
+--- a/gcc/config/riscv/riscv.h
++++ b/gcc/config/riscv/riscv.h
+@@ -912,10 +912,10 @@ while (0)
+ #define ASM_COMMENT_START "#"
+ 
+ #undef SIZE_TYPE
+-#define SIZE_TYPE (POINTER_SIZE == 64 ? "long unsigned int" : "unsigned int")
++#define SIZE_TYPE (POINTER_SIZE == 64 ? "long unsigned int" : "long unsigned int")
+ 
+ #undef PTRDIFF_TYPE
+-#define PTRDIFF_TYPE (POINTER_SIZE == 64 ? "long int" : "int")
++#define PTRDIFF_TYPE (POINTER_SIZE == 64 ? "long int" : "long int")
+ 
+ /* The maximum number of bytes copied by one iteration of a cpymemsi loop.  */
+ 
+@@ -1006,4 +1006,17 @@ extern void riscv_remove_unneeded_save_restore_calls (void);
+ #define CTZ_DEFINED_VALUE_AT_ZERO(MODE, VALUE) \
+   ((VALUE) = GET_MODE_UNIT_BITSIZE (MODE), 2)
+ 
++ /* genode.h */
++
++/*
++ * The 'LINK_SPEC' define comprises the rules of how the GCC frontend invokes
++ * the linker
++ */
++#undef LINK_SPEC
++#define LINK_SPEC " \
++-melf" XLEN_SPEC "lriscv \
++  %{mno-relax:--no-relax} \
++  %(shared:-shared) \
++     %{!static:--eh-frame-hdr}"
++
+ #endif /* ! GCC_RISCV_H */
+diff --git a/libgcc/config.host b/libgcc/config.host
+index 8c56fcae5..574ef77bd 100644
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -348,7 +348,7 @@ case ${host} in
+   tmake_file=t-vxworks
+   ;;
+ *-*-elf)
+-  extra_parts="crtbegin.o crtend.o"
++  extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
+   ;;
+ esac
+ 
+@@ -516,8 +516,12 @@ arm*-*-eabi* | arm*-*-symbianelf* | arm*-*-rtems*)
+ 	tm_file="$tm_file arm/bpabi-lib.h"
+ 	case ${host} in
+ 	arm*-*-eabi* | arm*-*-rtems*)
++	  # The 't-slibgcc' tmake file is needed to have libgcc_eh.a built.
++	  # The 't-eh-dw2-dip' tmake file is needed to let the tool chain use 'unwind-dw2-fde-dip.c',
++	  # needed for the exception handling on Genode in the presence of shared libraries.
++	  tmake_file="${tmake_file} t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver"
+ 	  tmake_file="${tmake_file} arm/t-bpabi t-crtfm"
+-	  extra_parts="crtbegin.o crtend.o crti.o crtn.o"
++	  extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
+ 	  ;;
+ 	arm*-*-symbianelf*)
+ 	  tmake_file="${tmake_file} arm/t-symbian t-slibgcc-nolc-override"
+@@ -715,6 +719,10 @@ i[34567]86-*-elf*)
+ 	tmake_file="$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic"
+ 	;;
+ x86_64-*-elf* | x86_64-*-rtems*)
++	# The 't-slibgcc' tmake file is needed to have libgcc_eh.a built.
++	# The 't-eh-dw2-dip' tmake file is needed to let the tool chain use 'unwind-dw2-fde-dip.c',
++	# needed for the exception handling on Genode in the presence of shared libraries.
++	tmake_file="$tmake_file t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver"
+ 	tmake_file="$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic"
+ 	case ${host} in
+ 	  x86_64-*-rtems*)
+@@ -1311,8 +1319,8 @@ riscv*-*-freebsd*)
+ 	extra_parts="$extra_parts crtbegin.o crtend.o crti.o crtn.o crtendS.o crtbeginT.o"
+ 	;;
+ riscv*-*-*)
+-	tmake_file="${tmake_file} riscv/t-softfp${host_address} t-softfp riscv/t-elf riscv/t-elf${host_address}"
+-	extra_parts="$extra_parts crtbegin.o crtend.o crti.o crtn.o"
++	tmake_file="${tmake_file} riscv/t-softfp${host_address} t-softfp riscv/t-elf riscv/t-elf${host_address} t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver"
++	extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
+ 	;;
+ rs6000-ibm-aix4.[3456789]* | powerpc-ibm-aix4.[3456789]*)
+ 	md_unwind_header=rs6000/aix-unwind.h

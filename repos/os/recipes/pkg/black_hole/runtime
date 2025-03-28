@@ -1,0 +1,37 @@
+<runtime ram="8M" caps="100" binary="black_hole">
+
+	<provides>
+		<audio_in/>
+		<audio_out/>
+		<capture/>
+		<event/>
+		<nic/>
+		<uplink/>
+		<rom/>
+		<report/>
+		<gpu/>
+		<usb/>
+		<play/>
+		<record/>
+	</provides>
+
+	<config>
+		<audio_in/>
+		<audio_out/>
+		<capture/>
+		<event/>
+		<nic/>
+		<uplink/>
+		<rom/>
+		<gpu/>
+		<usb/>
+		<play/>
+		<record/>
+	</config>
+
+	<content>
+		<rom label="ld.lib.so"/>
+		<rom label="black_hole"/>
+	</content>
+
+</runtime>

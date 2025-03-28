@@ -1,0 +1,4 @@
+libc
+posix
+openssl
+zlib

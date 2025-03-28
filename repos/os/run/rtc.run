@@ -1,0 +1,114 @@
+# RTC test
+
+create_boot_directory
+
+proc rtc_src { } {
+
+	if {[have_board linux]} { return "linux_rtc" }
+	if {[have_board pc]}    { return "pc_rtc" }
+
+	return "dummy_rtc"
+}
+
+import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/src/init \
+                  [depot_user]/src/report_rom \
+                  [depot_user]/src/[rtc_src]
+
+proc rtc_driver_start_attributes { } {
+
+	if {[have_board linux]} { return { name="linux_rtc" ld="no" } }
+	if {[have_board pc]}    { return { name="pc_rtc" } }
+
+	return { name="dummy_rtc" }
+}
+
+# RTC setting tested on Qemu only
+proc test_update { } { return [have_include power_on/qemu] }
+
+proc test_rtc_config { } {
+
+	if {![test_update]} {
+		return { <config/> } }
+
+	return {
+		<config set_rtc="yes" year="2069" month="12" day="31"
+		        hour="23" minute="55" second="0"/>
+	}
+}
+
+proc additional_start_nodes_for_update_test { } {
+
+	if {![test_update]} {
+		return { } }
+
+	return {
+	<start name="report_rom">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config verbose="yes">
+			<policy label_suffix="set_rtc" report="test-rtc -> set_rtc"/>
+		</config>
+	</start>}
+}
+
+proc rtc_driver_config_and_route { } {
+
+	if {![test_update]} {
+		return { <config/> } }
+
+	return {
+		<config allow_setting_rtc="true" verbose="yes"/>
+		<route>
+			<service name="ROM" label="set_rtc">
+				<child name="report_rom"/>
+			</service>
+			<any-service> <parent/> </any-service>
+		</route> }
+}
+
+install_config {
+<config prio_levels="2" verbose="yes">
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="IRQ"/>
+		<service name="IO_MEM"/>
+		<service name="IO_PORT"/>
+		<service name="PD"/>
+		<service name="RM"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+	</parent-provides>
+	<default-route>
+		<any-service> <parent/> <any-child/> </any-service>
+	</default-route>
+	<default caps="100"/>
+
+	<start name="timer">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Timer"/> </provides>
+	</start>
+
+	<start } [rtc_driver_start_attributes] { priority="-1">
+		<resource name="RAM" quantum="1M"/>
+		<provides><service name="Rtc"/></provides>
+		} [rtc_driver_config_and_route] {
+	</start>
+
+	<start name="test-rtc" priority="-1">
+		<resource name="RAM" quantum="1M"/>
+		} [test_rtc_config] {
+	</start>
+
+	} [additional_start_nodes_for_update_test] {
+
+</config>
+}
+
+build { test/rtc }
+
+build_boot_image [build_artifacts]
+
+append qemu_args " -nographic  "
+
+run_genode_until ".*--- RTC test finished ---.*\n" 60

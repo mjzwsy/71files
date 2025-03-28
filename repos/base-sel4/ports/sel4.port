@@ -1,0 +1,21 @@
+LICENSE   := GPLv2
+VERSION   := git
+DOWNLOADS := sel4.git
+
+URL(sel4) := https://github.com/seL4/seL4.git
+# master branch, version 12.1.0
+REV(sel4) := 21c1a2ca7a9786d1297e1ff0a132bc57eeb55530
+DIR(sel4) := src/kernel/sel4
+
+$(call check_tool,cmake)
+$(call check_tool,ninja)
+$(call check_tool,python)
+$(call check_python_module,future)
+$(call check_python_module,jinja2)
+$(call check_python_module,ply)
+$(call check_python_module,six)
+# required for ARM
+$(call check_python_module,pyfdt)
+$(call check_python_module,jsonschema)
+
+PATCHES   := $(sort $(wildcard $(REP_DIR)/patches/*.patch))

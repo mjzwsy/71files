@@ -1,0 +1,20 @@
+<config>
+	<parent-provides>
+		<service name="ROM"/>
+		<service name="PD"/>
+		<service name="CPU"/>
+		<service name="LOG"/>
+		<service name="Timer"/>
+		<service name="Capture"/>
+		<service name="Event"/>
+	</parent-provides>
+
+	<start name="fb_sdl" caps="100" ld="no">
+		<resource name="RAM" quantum="32M"/>
+		<route>
+			<service name="Event"> <parent label="sdl"/> </service>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+</config>

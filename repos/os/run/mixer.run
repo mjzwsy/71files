@@ -1,0 +1,215 @@
+if {[have_include "power_on/qemu"]} {
+	puts "\nTest running on Qemu is not supported.\n"
+	exit 0
+}
+
+build {
+	core init timer lib/ld
+	driver/audio
+	driver/platform
+	driver/acpi
+	server/mixer
+	server/dynamic_rom
+	server/report_rom
+	app/pci_decode
+	test/audio_out
+}
+
+create_boot_directory
+
+install_config {
+	<config>
+		<parent-provides>
+			<service name="ROM"/>
+			<service name="IRQ"/>
+			<service name="IO_MEM"/>
+			<service name="IO_PORT"/>
+			<service name="PD"/>
+			<service name="RM"/>
+			<service name="CPU"/>
+			<service name="LOG"/>
+		</parent-provides>
+		<default-route>
+			<service name="Audio_out"> <child name="mixer"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</default-route>
+
+		<default caps="100"/>
+
+		<start name="timer">
+			<resource name="RAM" quantum="1M"/>
+			<provides><service name="Timer"/></provides>
+		</start>
+
+		<start name="report_rom">
+			<resource name="RAM" quantum="2M"/>
+			<provides> <service name="Report"/> <service name="ROM"/> </provides>
+			<config>
+				<policy label="pci_decode -> system" report="acpi -> acpi"/>
+				<policy label="platform -> devices"  report="pci_decode -> devices"/>
+				<policy label_prefix="to_whom_it_may_concern" report="mixer -> channel_list"/>
+			</config>
+		</start>
+
+		<start name="acpi" caps="350">
+			<resource name="RAM" quantum="4M"/>
+			<route>
+				<service name="Report"> <child name="report_rom"/> </service>
+				<service name="IO_MEM"> <parent/> </service>
+				<service name="LOG">    <parent/> </service>
+				<service name="PD">     <parent/> </service>
+				<service name="RM">     <parent/> </service>
+				<service name="CPU">    <parent/> </service>
+				<service name="ROM">    <parent/> </service>
+			</route>
+		</start>
+
+		<start name="pci_decode" caps="350">
+			<resource name="RAM" quantum="2M"/>
+			<route>
+				<service name="Report">             <child name="report_rom"/> </service>
+				<service name="ROM" label="system"> <child name="report_rom"/> </service>
+				<service name="IO_MEM"> <parent/> </service>
+				<service name="LOG">    <parent/> </service>
+				<service name="PD">     <parent/> </service>
+				<service name="RM">     <parent/> </service>
+				<service name="CPU">    <parent/> </service>
+				<service name="ROM">    <parent/> </service>
+			</route>
+		</start>
+
+		<start name="platform" caps="100" managing_system="yes">
+			<resource name="RAM" quantum="1M"/>
+			<provides>
+				<service name="Platform"/>
+			</provides>
+			<route>
+				<service name="ROM" label="devices"> <child name="report_rom"/> </service>
+				<service name="Timer">   <child name="timer"/> </service>
+				<service name="IRQ">     <parent/> </service>
+				<service name="IO_MEM">  <parent/> </service>
+				<service name="ROM">     <parent/> </service>
+				<service name="PD">      <parent/> </service>
+				<service name="CPU">     <parent/> </service>
+				<service name="LOG">     <parent/> </service>
+				<service name="Timer">   <parent/> </service>
+			</route>
+			<config>
+				<policy label="audio -> "> <pci class="AUDIO"/> <pci class="HDAUDIO"/> </policy>
+			</config>
+		</start>
+
+		<start name="audio" caps="150">
+			<binary name="pci_audio"/>
+			<resource name="RAM" quantum="10M"/>
+			<provides>
+				<service name="Audio_in"/>
+				<service name="Audio_out"/>
+			</provides>
+			<config>
+				<mixer field="outputs.master" value="148,148"/>
+			</config>
+		</start>
+
+		<start name="dynamic_rom">
+			<resource name="RAM" quantum="4M"/>
+			<provides><service name="ROM"/></provides>
+			<config verbose="yes">
+				<rom name="mixer.config">
+					<inline description="client1 plays (volume 70%)">
+<mixer.config>
+	<default out_volume="75" volume="42" muted="false"/>
+	<channel_list>
+		<channel type="input" label="client1" name="right" number="1" active="1" volume="70" muted="false"/>
+		<channel type="input" label="client1" name="left" number="0" active="1" volume="70" muted="false"/>
+		<channel type="input" label="client2" name="right" number="1" active="1" volume="0" muted="false"/>
+		<channel type="input" label="client2" name="left" number="0" active="1" volume="0" muted="false"/>
+		<channel type="output" label="master" name="left" number="0" active="1" volume="100" muted="false"/>
+		<channel type="output" label="master" name="right" number="1" active="1" volume="100" muted="false"/>
+	</channel_list>
+</mixer.config>
+					</inline>
+					<sleep milliseconds="10000" />
+					<inline description="client2 plays (volume 70%)">
+<mixer.config>
+	<default out_volume="75" volume="42" muted="false"/>
+	<channel_list>
+		<channel type="input" label="client1" name="right" number="1" active="1" volume="0" muted="false"/>
+		<channel type="input" label="client1" name="left" number="0" active="1" volume="0" muted="false"/>
+		<channel type="input" label="client2" name="right" number="1" active="1" volume="70" muted="false"/>
+		<channel type="input" label="client2" name="left" number="0" active="1" volume="70" muted="false"/>
+		<channel type="output" label="master" name="left" number="0" active="1" volume="100" muted="false"/>
+		<channel type="output" label="master" name="right" number="1" active="1" volume="100" muted="false"/>
+	</channel_list>
+</mixer.config>
+					</inline>
+					<sleep milliseconds="10000" />
+					<inline description="both play (volume 50%)">
+<mixer.config>
+	<default out_volume="75" volume="42" muted="false"/>
+	<channel_list>
+		<channel type="input" label="client1" name="right" number="1" active="1" volume="50" muted="false"/>
+		<channel type="input" label="client1" name="left" number="0" active="1" volume="50" muted="false"/>
+		<channel type="input" label="client2" name="right" number="1" active="1" volume="50" muted="false"/>
+		<channel type="input" label="client2" name="left" number="0" active="1" volume="50" muted="false"/>
+		<channel type="output" label="master" name="left" number="0" active="1" volume="100" muted="false"/>
+		<channel type="output" label="master" name="right" number="1" active="1" volume="100" muted="false"/>
+	</channel_list>
+</mixer.config>
+					</inline>
+					<sleep milliseconds="10000" />
+				</rom>
+			</config>
+		</start>
+
+		<start name="mixer">
+			<resource name="RAM" quantum="2M"/>
+			<provides><service name="Audio_out"/></provides>
+			<route>
+				<service name="Audio_out"> <child name="audio"/> </service>
+				<service name="Report"> <child name="report_rom"/> </service>
+				<service name="ROM" label="config">
+					<child name="dynamic_rom" label="mixer.config"/> </service>
+				<any-service> <parent/> <any-child/> </any-service>
+			</route>
+		</start>
+
+		<start name="client1">
+			<binary name="test-audio_out"/>
+			<resource name="RAM" quantum="4M"/>
+			<config>
+				<filename>client1.f32</filename>
+			</config>
+			<route>
+				<service name="Audio_out"> <child name="mixer"/> </service>
+				<any-service> <parent/> <any-child/> </any-service>
+			</route>
+		</start>
+
+		<start name="client2">
+			<binary name="test-audio_out"/>
+			<resource name="RAM" quantum="4M"/>
+			<config>
+				<filename>client2.f32</filename>
+			</config>
+			<route>
+				<service name="Audio_out"> <child name="mixer"/> </service>
+				<any-service> <parent/> <any-child/> </any-service>
+			</route>
+		</start>
+	</config>
+}
+
+if {[expr ![file exists bin/client1.f32] || ![file exists bin/client2.f32]]} {
+	puts ""
+	puts "The sample files are missing. Please take a look at repos/dde_bsd/README"
+	puts "and create 'client1.f32' and 'client2.f32'. Afterwards put them into './bin'."
+	puts ""
+	exit 1
+}
+
+build_boot_image [list {*}[build_artifacts] client1.f32 client2.f32]
+
+append qemu_args " -nographic"
+
+run_genode_until forever

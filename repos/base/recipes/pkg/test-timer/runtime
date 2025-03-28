@@ -1,0 +1,34 @@
+<runtime ram="32M" caps="1000" binary="init">
+
+	<requires> <timer/> </requires>
+
+	<fail after_seconds="30"/>
+	<succeed>[init] child "client" exited with exit value 0</succeed>
+	<fail>Error: </fail>
+
+	<content>
+		<rom label="ld.lib.so"/>
+		<rom label="test-timer"/>
+	</content>
+
+	<config>
+		<parent-provides>
+			<service name="ROM"/>
+			<service name="IRQ"/>
+			<service name="IO_MEM"/>
+			<service name="IO_PORT"/>
+			<service name="PD"/>
+			<service name="RM"/>
+			<service name="CPU"/>
+			<service name="LOG"/>
+			<service name="Timer"/>
+		</parent-provides>
+		<default-route>
+			<any-service><parent/><any-child/></any-service>
+		</default-route>
+		<start name="client" caps="300">
+			<binary name="test-timer"/>
+			<resource name="RAM" quantum="10M"/>
+		</start>
+	</config>
+</runtime>

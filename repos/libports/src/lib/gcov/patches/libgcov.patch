@@ -1,0 +1,52 @@
+libgcov.patch
+
+From: Christian Prochaska <christian.prochaska@genode-labs.com>
+
+
+---
+ gcc/tsystem.h    |    6 ++++++
+ libgcc/libgcov.h |    2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/gcc/tsystem.h b/gcc/tsystem.h
+index dfaf9e8..d7cac00 100644
+--- a/gcc/tsystem.h
++++ b/gcc/tsystem.h
+@@ -90,7 +90,9 @@ extern void *memset (void *, int, size_t);
+ #include <sys/types.h>
+ 
+ /* All systems have this header.  */
++#if 0
+ #include <errno.h>
++#endif
+ 
+ #ifndef errno
+ extern int errno;
+@@ -102,10 +104,14 @@ extern int errno;
+ #include <unistd.h>
+ 
+ /* GCC supplies this header.  */
++#if 0
+ #include <limits.h>
++#endif
+ 
+ /* If these system headers do not exist, fixincludes must create them.  */
++#if 0
+ #include <time.h>
++#endif
+ 
+ #endif /* inhibit_libc */
+ 
+diff --git a/libgcc/libgcov.h b/libgcc/libgcov.h
+index c77a74a..f3ba7ce 100644
+--- a/libgcc/libgcov.h
++++ b/libgcc/libgcov.h
+@@ -49,6 +49,8 @@
+ #include <sys/mman.h>
+ #endif
+ 
++#include <stdint.h>
++
+ #if __CHAR_BIT__ == 8
+ typedef unsigned gcov_unsigned_t __attribute__ ((mode (SI)));
+ typedef unsigned gcov_position_t __attribute__ ((mode (SI)));
